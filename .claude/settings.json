@@ -74,6 +74,9 @@
       "Bash(~/tools/rp++:*)",
       "Bash(dalfox:*)",
       "Bash(commix:*)",
+      "Bash(docker:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker-compose:*)",
       "WebSearch",
       "WebFetch(domain:r.jina.ai)"
     ]

@@ -33,15 +33,22 @@ rev → critic → verifier → reporter
 | critic | verify algorithm description vs binary behavior | critic_review.md |
 | verifier | python3 solve.py \| ./binary | flag |
 
-### WEB
+### WEB (3-Phase 강제)
 ```
-web → critic → verifier → reporter
+web → web-docker → web-remote → critic → verifier → reporter
 ```
-| Agent | Tools | Output |
-|-------|-------|--------|
-| web | curl, sqlmap, dalfox, ffuf, SSRFmap, commix, Playwright MCP, PayloadsAllTheThings | solve.py |
-| critic | verify exploit logic, auth bypass, injection proof | critic_review.md |
-| verifier | run exploit → flag capture | flag |
+| Agent | Phase | Tools | Output |
+|-------|-------|-------|--------|
+| web | 1. 소스 분석 | Read, Grep, Glob (네트워크 도구 금지) | web_analysis.md, solve.py 초안 |
+| web-docker | 2. 로컬 검증 | docker compose, curl localhost, python3 solve.py | docker_test_report.md (2/2 성공 필수) |
+| web-remote | 3. 리모트 플래그 | python3 solve.py (TARGET=REMOTE) | remote_output.txt, flag |
+| critic | 검증 | cross-verify exploit logic | critic_review.md |
+| verifier | 최종 확인 | flag format validation | flag |
+
+**Phase 순서 절대 위반 금지:**
+- web 에이전트는 서버에 HTTP 요청을 보내지 않는다
+- web-docker는 localhost만 공격한다 (리모트 접근 금지)
+- web-remote는 로컬 2/2 성공 후에만 실행된다
 
 ### CRYPTO
 ```

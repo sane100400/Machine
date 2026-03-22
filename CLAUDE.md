@@ -20,7 +20,7 @@
 CTF Pipeline (by category):
   pwn:      pwn → critic → verifier → reporter
   rev:      rev → critic → verifier → reporter
-  web:      web → critic → verifier → reporter
+  web:      web → web-docker → web-remote → critic → verifier → reporter
   crypto:   crypto → critic → verifier → reporter
   forensics: forensics → critic → verifier → reporter
   web3:     web3 → critic → verifier → reporter
@@ -33,7 +33,9 @@ CTF Pipeline (by category):
 |-------|-------|----------|
 | pwn | opus | PWN — full pipeline: Ghidra + GDB + pwntools + ROPgadget |
 | rev | opus | REV — full pipeline: Ghidra + GDB + Frida + z3 + angr |
-| web | opus | WEB — SQLi, SSTI, SSRF, LFI, deserialization, ffuf, sqlmap |
+| web | opus | WEB Phase 1 — 소스 분석 only (서버 접근 금지) |
+| web-docker | opus | WEB Phase 2 — 로컬 Docker에서 exploit 검증 |
+| web-remote | opus | WEB Phase 3 — 리모트 서버에서 플래그 획득 |
 | crypto | opus | CRYPTO — RSA, XOR, AES attacks, SageMath, hashcat |
 | forensics | opus | FORENSICS — stego, PCAP, memory, disk, binwalk, volatility3 |
 | web3 | opus | WEB3 — Slither + Mythril + Foundry + cast |

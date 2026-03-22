@@ -292,16 +292,20 @@ echo ""
 echo "Pipeline by category:"
 echo "  PWN:       @pwn → @critic → @verifier → @reporter"
 echo "  REV:       @rev → @critic → @verifier → @reporter"
-echo "  WEB:       @web → @critic → @verifier → @reporter"
+echo "  WEB:       @web → @web-docker → @web-remote → @critic → @verifier → @reporter"
 echo "  CRYPTO:    @crypto → @critic → @verifier → @reporter"
 echo "  FORENSICS: @forensics → @critic → @verifier → @reporter"
 echo "  WEB3:      @web3 → @critic → @verifier → @reporter"
 fi)
 $([ -n "$SERVER" ] && echo "
-IMPORTANT: The challenge server is running at $SERVER
-- For web challenges: send HTTP requests to $SERVER
-- For pwn challenges: use remote('HOST', PORT) in pwntools
-- Flags obtained from this server are REAL flags")
+IMPORTANT: Remote server = $SERVER
+- This is the REAL flag server. But DO NOT hit it first.
+- For WEB challenges, you MUST follow this order:
+  1. Source code analysis ONLY (no requests to any server)
+  2. docker compose up -d → exploit on localhost FIRST
+  3. Only after local success → run solve.py against $SERVER
+- For PWN challenges: use remote() in pwntools only after local binary test passes
+- Flags obtained from $SERVER are REAL flags")
 
 Pass each agent's output to the next via structured HANDOFF.
 Save solve.py to $CHALLENGE_DIR/solve.py
@@ -518,7 +522,7 @@ Files found: $FILES
 Report directory: $REPORT_DIR
 Writeup output: $WRITEUP_FILE
 Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
-$([ -n "$SERVER" ] && echo "Target server: $SERVER")
+$([ -n "$SERVER" ] && echo "Remote server: $SERVER (DO NOT access until local Docker exploit succeeds)")
 
 MANDATORY: Follow CLAUDE.md pipeline rules.
 
@@ -534,10 +538,16 @@ fi)
 STEP 4: Spawn pipeline agents:
   PWN:       @pwn → @critic → @verifier → @reporter
   REV:       @rev → @critic → @verifier → @reporter
-  WEB:       @web → @critic → @verifier → @reporter
+  WEB:       @web → @web-docker → @web-remote → @critic → @verifier → @reporter
   CRYPTO:    @crypto → @critic → @verifier → @reporter
   FORENSICS: @forensics → @critic → @verifier → @reporter
   WEB3:      @web3 → @critic → @verifier → @reporter
+
+$([ -n "$SERVER" ] && echo "CRITICAL — WEB CHALLENGE 3-PHASE RULE:
+  Phase 1: Read ALL source code first. NO requests to any server.
+  Phase 2: docker compose up -d → exploit localhost. Verify 2/2 success.
+  Phase 3: ONLY after local success → run solve.py against $SERVER for real flag.
+  solve.py must have TARGET variable (LOCAL/REMOTE) for easy switching.")
 
 Save solve.py to $CHALLENGE_DIR/solve.py
 

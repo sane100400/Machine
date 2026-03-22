@@ -41,6 +41,8 @@ COMBINED="${SUBAGENT_TYPE} ${PROMPT}"
 case "$SUBAGENT_TYPE" in
     pwn*)       QUERY="heap exploitation tcache ROP binary pwn" ;;
     rev*)       QUERY="reverse engineering GDB oracle custom VM algorithm" ;;
+    web-docker*) QUERY="docker compose web exploit localhost verification" ;;
+    web-remote*) QUERY="web exploit remote flag capture" ;;
     web*)       QUERY="XSS SSRF SSTI SQLi prototype pollution deserialization web" ;;
     crypto*)    QUERY="RSA cipher hash attack crypto" ;;
     forensics*) QUERY="steganography pcap memory forensics binwalk" ;;
