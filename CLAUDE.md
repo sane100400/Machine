@@ -24,21 +24,27 @@ CTF Pipeline (by category):
   crypto:   crypto → critic → verifier → reporter
   forensics: forensics → critic → verifier → reporter
   web3:     web3 → critic → verifier → reporter
+
 ```
 
-### Agent Model Assignment (MANDATORY — all opus)
+### Agent Model Assignment (MANDATORY)
+
+**원칙:** 복잡한 추론 = opus, 도구 기반/템플릿 작업 = sonnet
+
+#### CTF Agents
 
 | Agent | Model | Category |
 |-------|-------|----------|
 | pwn | opus | PWN — full pipeline: Ghidra + GDB + pwntools + ROPgadget |
 | rev | opus | REV — full pipeline: Ghidra + GDB + Frida + z3 + angr |
-| web | opus | WEB — SQLi, SSTI, SSRF, LFI, deserialization, ffuf, sqlmap |
+| web | sonnet | WEB — SQLi, SSTI, SSRF, LFI, deserialization, ffuf, sqlmap |
 | crypto | opus | CRYPTO — RSA, XOR, AES attacks, SageMath, hashcat |
-| forensics | opus | FORENSICS — stego, PCAP, memory, disk, binwalk, volatility3 |
+| forensics | sonnet | FORENSICS — stego, PCAP, memory, disk, binwalk, volatility3 |
 | web3 | opus | WEB3 — Slither + Mythril + Foundry + cast |
 | critic | opus | ALL — cross-verification |
-| verifier | opus | ALL — flag confirmation |
-| reporter | opus | ALL — writeup |
+| verifier | sonnet | ALL — flag confirmation (mechanical: 3x run) |
+| reporter | sonnet | ALL — writeup (template-driven) |
+
 
 ### Structured Handoff Protocol
 
@@ -81,8 +87,23 @@ Before spawning agents, Orchestrator searches knowledge:
 
 ### Mode B: Autonomous (background)
 ```bash
+# CTF
 ./machine.sh ctf /path/to/challenge[.zip]
 ./machine.sh status | logs
+
+```
+
+Options: `--json`, `--timeout N`, `--dry-run`
+
+## Quality Gates (Pipeline Blocking)
+
+All pipeline transitions use `tools/quality_gate.py`. Exit 0 = PASS, Exit 1 = FAIL (blocks handoff).
+
+```bash
+# CTF gates
+python3 tools/quality_gate.py ctf-verify <challenge_dir>
+python3 tools/quality_gate.py artifact-check <challenge_dir> --stage critic|verifier|reporter
+
 ```
 
 ## State Store (MANDATORY — Hallucination Prevention)
@@ -160,6 +181,7 @@ Status reports: 1-2 sentence result + 1 sentence next action.
 - **Web**: sqlmap, SSRFmap, commix, ffuf, dalfox, curl, Python requests, Playwright MCP
 - **Crypto**: sage, hashcat, john, openssl
 - **Forensics**: binwalk, file, exiftool, wireshark, foremost, volatility3
+- **Pipeline**: quality_gate.py, context_digest.py, knowledge.py, state.py
 - **MCP**: gdb, ghidra, context7
 
 ## Knowledge Base (에이전트 언제든 검색 가능)
@@ -168,14 +190,30 @@ Status reports: 1-2 sentence result + 1 sentence next action.
 # 기법 검색 — 파일에 없는 기법은 즉시 WebSearch로 폴백
 python3 $MACHINE_ROOT/tools/knowledge.py search "tcache poisoning"
 python3 $MACHINE_ROOT/tools/knowledge.py search "prototype pollution RCE node"
-python3 $MACHINE_ROOT/tools/knowledge.py search "HTTP request smuggling"
+
+# 전체 테이블 검색 (기법 + ExploitDB + Nuclei + PoC-in-GitHub)
+python3 $MACHINE_ROOT/tools/knowledge.py search-all "CVE-2024-1234"
+python3 $MACHINE_ROOT/tools/knowledge.py search-exploits "apache RCE"
+
+# 외부 소스 인덱싱 (최초 1회 실행)
+python3 $MACHINE_ROOT/tools/knowledge.py index-external
 
 # 새 기법 문서 추가 후 인덱스 갱신
 python3 $MACHINE_ROOT/tools/knowledge.py add knowledge/techniques/new_technique.md
-python3 $MACHINE_ROOT/tools/knowledge.py status   # 인덱스 현황
+python3 $MACHINE_ROOT/tools/knowledge.py stats   # 테이블별 카운트
 ```
 
 **검색 결과 없음 → 즉시 WebSearch 사용. 기법 파일 없음 = 에이전트 실패 이유 아님.**
+
+## Context Digest (대용량 출력 압축)
+
+```bash
+# 500줄+ 출력 압축 (rule-based)
+cat large_output.txt | python3 tools/context_digest.py --max-lines 100
+
+# Gemini 요약 활용 (GEMINI_API_KEY 설정 시)
+python3 tools/context_digest.py --file output.txt --prefer-gemini
+```
 
 ## Flag Formats
 

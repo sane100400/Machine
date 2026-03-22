@@ -75,6 +75,29 @@ web3 → critic → verifier → reporter
 
 ---
 
+## Quality Gate Checks (MANDATORY between stages)
+
+```
+worker → [artifact-check --stage critic] → critic
+critic → [artifact-check --stage verifier] → verifier
+verifier → [artifact-check --stage reporter] → reporter
+```
+
+```bash
+# Before critic
+python3 tools/quality_gate.py artifact-check <challenge_dir> --stage critic
+
+# Before verifier (critic must have APPROVED)
+python3 tools/quality_gate.py artifact-check <challenge_dir> --stage verifier
+
+# Before reporter
+python3 tools/quality_gate.py artifact-check <challenge_dir> --stage reporter
+```
+
+Gate exit 1 → do NOT proceed. Fix issues first.
+
+---
+
 ## Failure Protocol
 
 - 3 failures same approach → STOP, try fundamentally different approach

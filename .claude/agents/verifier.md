@@ -1,7 +1,7 @@
 ---
 name: verifier
 description: Use this agent when running final exploit verification locally and remotely without modifying the produced solve or proof of concept.
-model: opus
+model: sonnet
 color: green
 permissionMode: bypassPermissions
 ---

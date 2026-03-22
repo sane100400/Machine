@@ -72,6 +72,8 @@
       "Bash(anvil:*)",
       "Bash(~/exploitdb/searchsploit:*)",
       "Bash(~/tools/rp++:*)",
+      "Bash(dalfox:*)",
+      "Bash(commix:*)",
       "WebSearch",
       "WebFetch(domain:r.jina.ai)"
     ]

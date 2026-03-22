@@ -38,19 +38,16 @@ fi
 QUERY=""
 COMBINED="${SUBAGENT_TYPE} ${PROMPT}"
 
-if echo "$COMBINED" | grep -qiE 'pwn[-_]reverser|pwn[-_]trigger|pwn[-_]chain'; then
-    QUERY="heap exploitation tcache ROP binary pwn"
-elif echo "$COMBINED" | grep -qiE 'rev[-_]reverser|rev[-_]solver'; then
-    QUERY="reverse engineering GDB oracle custom VM algorithm"
-elif echo "$COMBINED" | grep -qiE 'web[-_]ctf|web[-_]tester'; then
-    QUERY="XSS SSRF SSTI SQLi prototype pollution deserialization web"
-elif echo "$COMBINED" | grep -qiE 'crypto[-_]solver'; then
-    QUERY="RSA cipher hash attack crypto"
-elif echo "$COMBINED" | grep -qiE 'forensics'; then
-    QUERY="steganography pcap memory forensics binwalk"
-elif echo "$COMBINED" | grep -qiE 'web3[-_]auditor'; then
-    QUERY="smart contract reentrancy DeFi EVM Solidity"
-fi
+case "$SUBAGENT_TYPE" in
+    pwn*)       QUERY="heap exploitation tcache ROP binary pwn" ;;
+    rev*)       QUERY="reverse engineering GDB oracle custom VM algorithm" ;;
+    web*)       QUERY="XSS SSRF SSTI SQLi prototype pollution deserialization web" ;;
+    crypto*)    QUERY="RSA cipher hash attack crypto" ;;
+    forensics*) QUERY="steganography pcap memory forensics binwalk" ;;
+    web3*)      QUERY="smart contract reentrancy DeFi EVM Solidity" ;;
+    critic*)    QUERY="verification cross-check audit review" ;;
+    reporter*)  QUERY="report writeup disclosure submission" ;;
+esac
 
 # 프롬프트에서 기술 키워드 추출해서 쿼리 보강
 TECH_KEYWORDS=$(echo "$PROMPT" | grep -oiE 'heap|tcache|rop|format.string|overflow|uaf|use.after.free|fsop|xss|ssrf|ssti|sqli|jwt|prototype|deserialization|reentrancy|kernel|wasm' | sort -u | tr '\n' ' ')

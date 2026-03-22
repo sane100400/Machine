@@ -1,7 +1,7 @@
 ---
 name: web
 description: Use this agent for web CTF challenges — recon, vulnerability identification, and exploit development. Calls domain-specific tools: ffuf, sqlmap, dalfox, SSRFmap, commix, Playwright.
-model: opus
+model: sonnet
 color: yellow
 permissionMode: bypassPermissions
 ---
