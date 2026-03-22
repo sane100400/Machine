@@ -40,6 +40,7 @@ done
 MODE="${1:-help}"
 TARGET="${2:-}"
 SCOPE="${3:-}"
+SERVER="${4:-}"
 
 # --- Banner ---
 
@@ -231,6 +232,7 @@ print(json.dumps(plan, indent=2))
         echo "[DRY-RUN] CTF mode"
         echo "  Challenge: $CHALLENGE_DIR"
         echo "  Category:  ${CATEGORY:-auto-detect}"
+        [ -n "$SERVER" ] && echo "  Server:    $SERVER"
         echo "  Files:     $FILES"
         echo "  Model:     $MODEL"
         echo "  Report:    $REPORT_DIR"
@@ -244,6 +246,7 @@ print(json.dumps(plan, indent=2))
       echo "╔══════════════════════════════════════════════╗"
       echo "║  Challenge: $(basename "$CHALLENGE_DIR")"
       echo "║  Category:  ${CATEGORY:-auto-detect}"
+      [ -n "$SERVER" ] && echo "║  Server:    $SERVER"
       echo "║  Files:     $FILES"
       echo "║  Model:     $MODEL"
       echo "║  Report:    $REPORT_DIR"
@@ -263,16 +266,16 @@ print(json.dumps(plan, indent=2))
       CLAUDE_CMD="timeout $TIMEOUT claude -p"
     fi
 
-    # Run in background with nohup
-    nohup bash -c "
-      START_TS=$START_TS
-      $CLAUDE_CMD \"$(cat <<PROMPT
+    # Write prompt to file (avoids heredoc escaping hell in nohup)
+    PROMPT_FILE="$REPORT_DIR/prompt.txt"
+    cat > "$PROMPT_FILE" <<PROMPT_EOF
 You are Machine Orchestrator. Use Agent Teams to solve this CTF challenge.
 
 Challenge directory: $CHALLENGE_DIR
 Files found: $FILES
 Report directory: $REPORT_DIR
 Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
+$([ -n "$SERVER" ] && echo "Target server: $SERVER")
 
 MANDATORY: Follow CLAUDE.md pipeline rules.
 
@@ -294,6 +297,11 @@ echo "  CRYPTO:    @crypto → @critic → @verifier → @reporter"
 echo "  FORENSICS: @forensics → @critic → @verifier → @reporter"
 echo "  WEB3:      @web3 → @critic → @verifier → @reporter"
 fi)
+$([ -n "$SERVER" ] && echo "
+IMPORTANT: The challenge server is running at $SERVER
+- For web challenges: send HTTP requests to $SERVER
+- For pwn challenges: use remote('HOST', PORT) in pwntools
+- Flags obtained from this server are REAL flags")
 
 Pass each agent's output to the next via structured HANDOFF.
 Save solve.py to $CHALLENGE_DIR/solve.py
@@ -302,46 +310,60 @@ Save writeup to $REPORT_DIR/writeup.md
 STEP 5: Collect results — Update knowledge/index.md
 
 Flag formats: DH{...}, FLAG{...}, flag{...}, CTF{...}, GoN{...}, CYAI{...}
-PROMPT
-)\" --permission-mode bypassPermissions --model \"$MODEL\" 2>&1 | tee \"$REPORT_DIR/session.log\"
-      CLAUDE_EXIT=\${PIPESTATUS[0]}
+PROMPT_EOF
 
-      # Post-processing
-      echo '' >> \"$REPORT_DIR/session.log\"
-      echo '=== SESSION COMPLETE ===' >> \"$REPORT_DIR/session.log\"
-      echo \"Timestamp: \$(date)\" >> \"$REPORT_DIR/session.log\"
+    # Write runner script (avoids nohup escaping issues)
+    RUNNER="$REPORT_DIR/runner.sh"
+    cat > "$RUNNER" <<RUNNER_EOF
+#!/bin/bash
+START_TS=$START_TS
+PROMPT_FILE="$PROMPT_FILE"
+REPORT_DIR="$REPORT_DIR"
+SCRIPT_DIR="$SCRIPT_DIR"
+PID_FILE="$PID_FILE"
+MODEL="$MODEL"
+CHALLENGE_DIR="$CHALLENGE_DIR"
+TIMEOUT_VAL=$TIMEOUT
 
-      # Extract flags
-      FLAGS=\$(grep -oE '(DH|FLAG|flag|CTF|GoN|CYAI)\{[^}]+\}' \"$REPORT_DIR/session.log\" 2>/dev/null | sort -u || true)
-      if [ -n \"\$FLAGS\" ]; then
-        echo \"FLAGS FOUND:\" >> \"$REPORT_DIR/session.log\"
-        echo \"\$FLAGS\" >> \"$REPORT_DIR/session.log\"
-        echo \"\$FLAGS\" > \"$REPORT_DIR/flags.txt\"
-      else
-        echo 'NO FLAGS FOUND' >> \"$REPORT_DIR/session.log\"
-      fi
+CLAUDE_CMD="claude -p"
+if [ "\$TIMEOUT_VAL" -gt 0 ] 2>/dev/null; then
+  CLAUDE_CMD="timeout \$TIMEOUT_VAL claude -p"
+fi
 
-      # Determine exit code based on findings
-      FINAL_EXIT=\$(bash $SCRIPT_DIR/machine.sh _exit_code $REPORT_DIR 2>/dev/null || echo 0)
-      echo \"\$FINAL_EXIT\" > \"$REPORT_DIR/exit_code\"
+\$CLAUDE_CMD "\$(cat "\$PROMPT_FILE")" --permission-mode bypassPermissions --model "\$MODEL" --output-format stream-json --verbose 2>&1 | python3 -u "\$SCRIPT_DIR/tools/stream_parser.py" "\$REPORT_DIR/session.log"
+CLAUDE_EXIT=\$?
 
-      # Determine status
-      SESSION_STATUS='completed'
-      if [ \"\$CLAUDE_EXIT\" -eq 124 ] 2>/dev/null; then
-        SESSION_STATUS='timeout'
-      elif [ \"\$CLAUDE_EXIT\" -ne 0 ] 2>/dev/null; then
-        SESSION_STATUS='failed'
-      fi
+echo '' >> "\$REPORT_DIR/session.log"
+echo '=== SESSION COMPLETE ===' >> "\$REPORT_DIR/session.log"
+echo "Timestamp: \$(date)" >> "\$REPORT_DIR/session.log"
 
-      # Generate summary.json
-      bash $SCRIPT_DIR/machine.sh _summary $REPORT_DIR ctf '$CHALLENGE_DIR' \$START_TS \$FINAL_EXIT \$SESSION_STATUS 2>/dev/null || true
+FLAGS=\$(grep -oE '(DH|FLAG|flag|CTF|GoN|CYAI)\{[^}]+\}' "\$REPORT_DIR/session.log" 2>/dev/null | sort -u || true)
+if [ -n "\$FLAGS" ]; then
+  echo "FLAGS FOUND:" >> "\$REPORT_DIR/session.log"
+  echo "\$FLAGS" >> "\$REPORT_DIR/session.log"
+  echo "\$FLAGS" > "\$REPORT_DIR/flags.txt"
+else
+  echo 'NO FLAGS FOUND' >> "\$REPORT_DIR/session.log"
+fi
 
-      rm -f \"$PID_FILE\"
-    " > "$LOG_FILE" 2>&1 &
+FINAL_EXIT=\$(bash "\$SCRIPT_DIR/machine.sh" _exit_code "\$REPORT_DIR" 2>/dev/null || echo 0)
+echo "\$FINAL_EXIT" > "\$REPORT_DIR/exit_code"
+
+SESSION_STATUS='completed'
+[ "\$CLAUDE_EXIT" -eq 124 ] 2>/dev/null && SESSION_STATUS='timeout'
+[ "\$CLAUDE_EXIT" -ne 0 ] 2>/dev/null && SESSION_STATUS='failed'
+bash "\$SCRIPT_DIR/machine.sh" _summary "\$REPORT_DIR" ctf "\$CHALLENGE_DIR" "\$START_TS" "\$FINAL_EXIT" "\$SESSION_STATUS" 2>/dev/null || true
+
+rm -f "\$PID_FILE"
+RUNNER_EOF
+    chmod +x "$RUNNER"
+
+    # Run in background
+    nohup bash "$RUNNER" > /dev/null 2>&1 &
 
     BGPID=$!
     echo "$BGPID" > "$PID_FILE"
-    echo "$BGPID $REPORT_DIR $TIMESTAMP ctf" >> "$SCRIPT_DIR/.machine.history"
+    echo "$BGPID $REPORT_DIR $TIMESTAMP ctf $START_TS" >> "$SCRIPT_DIR/.machine.history"
 
     if [ "$JSON_OUTPUT" = true ]; then
       echo "$REPORT_DIR/summary.json"
@@ -456,6 +478,7 @@ PROMPT
       echo "[DRY-RUN] Learn mode"
       echo "  Challenge: $CHALLENGE_DIR"
       echo "  Category:  ${CATEGORY:-auto-detect}"
+      [ -n "$SERVER" ] && echo "  Server:    $SERVER"
       echo "  Files:     $FILES"
       echo "  Model:     $MODEL"
       echo "  Writeup:   $WRITEUP_FILE"
@@ -468,6 +491,7 @@ PROMPT
       echo "╔══════════════════════════════════════════════╗"
       echo "║  Challenge: $(basename "$CHALLENGE_DIR")"
       echo "║  Category:  ${CATEGORY:-auto-detect}"
+      [ -n "$SERVER" ] && echo "║  Server:    $SERVER"
       echo "║  Files:     $FILES"
       echo "║  Model:     $MODEL"
       echo "║  Writeup:   $WRITEUP_FILE"
@@ -480,14 +504,9 @@ PROMPT
 
     START_TS="$(date +%s)"
 
-    CLAUDE_CMD="claude -p"
-    if [ "$TIMEOUT" -gt 0 ] 2>/dev/null; then
-      CLAUDE_CMD="timeout $TIMEOUT claude -p"
-    fi
-
-    nohup bash -c "
-      START_TS=$START_TS
-      $CLAUDE_CMD \"$(cat <<PROMPT
+    # Write prompt to file
+    PROMPT_FILE="$REPORT_DIR/prompt.txt"
+    cat > "$PROMPT_FILE" <<PROMPT_EOF
 You are Machine Orchestrator in LEARN MODE.
 
 Your goal is to SOLVE this CTF challenge AND produce a detailed WRITEUP for the knowledge database.
@@ -499,6 +518,7 @@ Files found: $FILES
 Report directory: $REPORT_DIR
 Writeup output: $WRITEUP_FILE
 Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
+$([ -n "$SERVER" ] && echo "Target server: $SERVER")
 
 MANDATORY: Follow CLAUDE.md pipeline rules.
 
@@ -546,43 +566,63 @@ STEP 5: After writing $WRITEUP_FILE, run:
 STEP 6: Update knowledge/index.md with this challenge entry
 
 Flag formats: DH{...}, FLAG{...}, flag{...}, CTF{...}, GoN{...}, CYAI{...}
-PROMPT
-)\" --permission-mode bypassPermissions --model \"$MODEL\" 2>&1 | tee \"$REPORT_DIR/session.log\"
-      CLAUDE_EXIT=\${PIPESTATUS[0]}
+PROMPT_EOF
 
-      echo '=== SESSION COMPLETE ===' >> \"$REPORT_DIR/session.log\"
+    # Write runner script
+    RUNNER="$REPORT_DIR/runner.sh"
+    cat > "$RUNNER" <<RUNNER_EOF
+#!/bin/bash
+START_TS=$START_TS
+PROMPT_FILE="$PROMPT_FILE"
+REPORT_DIR="$REPORT_DIR"
+SCRIPT_DIR="$SCRIPT_DIR"
+PID_FILE="$PID_FILE"
+MODEL="$MODEL"
+CHALLENGE_DIR="$CHALLENGE_DIR"
+WRITEUP_FILE="$WRITEUP_FILE"
+KNOWLEDGE_PY="$KNOWLEDGE_PY"
+TIMEOUT_VAL=$TIMEOUT
 
-      # Extract flags
-      FLAGS=\$(grep -oE '(DH|FLAG|flag|CTF|GoN|CYAI)\{[^}]+\}' \"$REPORT_DIR/session.log\" 2>/dev/null | sort -u || true)
-      if [ -n \"\$FLAGS\" ]; then
-        echo \"\$FLAGS\" > \"$REPORT_DIR/flags.txt\"
-      fi
+CLAUDE_CMD="claude -p"
+if [ "\$TIMEOUT_VAL" -gt 0 ] 2>/dev/null; then
+  CLAUDE_CMD="timeout \$TIMEOUT_VAL claude -p"
+fi
 
-      # If writeup wasn't created by Claude, generate one from artifacts
-      if [ ! -s \"$WRITEUP_FILE\" ]; then
-        echo '[*] Writeup not found, generating from artifacts...' >> \"$REPORT_DIR/session.log\"
-        # Fallback: index whatever we have
-        for md in \"$CHALLENGE_DIR\"/*.md \"$REPORT_DIR\"/*.md; do
-          [ -f \"\$md\" ] && python3 \"$KNOWLEDGE_PY\" add \"\$md\" 2>/dev/null || true
-        done
-      else
-        # Index the writeup
-        python3 \"$KNOWLEDGE_PY\" add \"$WRITEUP_FILE\" 2>/dev/null || true
-        echo '[*] Writeup indexed to knowledge DB' >> \"$REPORT_DIR/session.log\"
-      fi
+\$CLAUDE_CMD "\$(cat "\$PROMPT_FILE")" --permission-mode bypassPermissions --model "\$MODEL" --output-format stream-json --verbose 2>&1 | python3 -u "\$SCRIPT_DIR/tools/stream_parser.py" "\$REPORT_DIR/session.log"
+CLAUDE_EXIT=\$?
 
-      # Generate summary
-      FINAL_EXIT=\$(bash $SCRIPT_DIR/machine.sh _exit_code $REPORT_DIR 2>/dev/null || echo 0)
-      SESSION_STATUS='completed'
-      [ \"\$CLAUDE_EXIT\" -eq 124 ] 2>/dev/null && SESSION_STATUS='timeout'
-      [ \"\$CLAUDE_EXIT\" -ne 0 ] 2>/dev/null && SESSION_STATUS='failed'
-      bash $SCRIPT_DIR/machine.sh _summary $REPORT_DIR learn '$CHALLENGE_DIR' \$START_TS \$FINAL_EXIT \$SESSION_STATUS 2>/dev/null || true
-      rm -f \"$PID_FILE\"
-    " > "$LOG_FILE" 2>&1 &
+echo '=== SESSION COMPLETE ===' >> "\$REPORT_DIR/session.log"
+
+FLAGS=\$(grep -oE '(DH|FLAG|flag|CTF|GoN|CYAI)\{[^}]+\}' "\$REPORT_DIR/session.log" 2>/dev/null | sort -u || true)
+if [ -n "\$FLAGS" ]; then
+  echo "\$FLAGS" > "\$REPORT_DIR/flags.txt"
+fi
+
+if [ ! -s "\$WRITEUP_FILE" ]; then
+  echo '[*] Writeup not found, generating from artifacts...' >> "\$REPORT_DIR/session.log"
+  for md in "\$CHALLENGE_DIR"/*.md "\$REPORT_DIR"/*.md; do
+    [ -f "\$md" ] && python3 "\$KNOWLEDGE_PY" add "\$md" 2>/dev/null || true
+  done
+else
+  python3 "\$KNOWLEDGE_PY" add "\$WRITEUP_FILE" 2>/dev/null || true
+  echo '[*] Writeup indexed to knowledge DB' >> "\$REPORT_DIR/session.log"
+fi
+
+FINAL_EXIT=\$(bash "\$SCRIPT_DIR/machine.sh" _exit_code "\$REPORT_DIR" 2>/dev/null || echo 0)
+SESSION_STATUS='completed'
+[ "\$CLAUDE_EXIT" -eq 124 ] 2>/dev/null && SESSION_STATUS='timeout'
+[ "\$CLAUDE_EXIT" -ne 0 ] 2>/dev/null && SESSION_STATUS='failed'
+bash "\$SCRIPT_DIR/machine.sh" _summary "\$REPORT_DIR" learn "\$CHALLENGE_DIR" "\$START_TS" "\$FINAL_EXIT" "\$SESSION_STATUS" 2>/dev/null || true
+rm -f "\$PID_FILE"
+RUNNER_EOF
+    chmod +x "$RUNNER"
+
+    # Run in background
+    nohup bash "$RUNNER" > /dev/null 2>&1 &
 
     BGPID=$!
     echo "$BGPID" > "$PID_FILE"
-    echo "$BGPID $REPORT_DIR $TIMESTAMP learn" >> "$SCRIPT_DIR/.machine.history"
+    echo "$BGPID $REPORT_DIR $TIMESTAMP learn $START_TS" >> "$SCRIPT_DIR/.machine.history"
 
     if [ "$JSON_OUTPUT" = true ]; then
       echo "$REPORT_DIR/summary.json"
@@ -595,46 +635,132 @@ PROMPT
     ;;
 
   status)
+    # Parse last history entry
+    LAST_START_TS=""
+    LAST_DIR=""
+    LAST_MODE=""
+    if [ -f "$SCRIPT_DIR/.machine.history" ]; then
+      LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
+      LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
+      LAST_MODE="$(echo "$LAST" | awk '{print $4}')"
+      LAST_START_TS="$(echo "$LAST" | awk '{print $5}')"
+    fi
+
+    # Calculate elapsed time
+    format_elapsed() {
+      local secs="$1"
+      local mins=$((secs / 60))
+      local hrs=$((mins / 60))
+      mins=$((mins % 60))
+      secs=$((secs % 60))
+      if [ "$hrs" -gt 0 ]; then
+        printf "%dh %dm %ds" "$hrs" "$mins" "$secs"
+      elif [ "$mins" -gt 0 ]; then
+        printf "%dm %ds" "$mins" "$secs"
+      else
+        printf "%ds" "$secs"
+      fi
+    }
+
     if [ ! -f "$PID_FILE" ]; then
       echo "[*] No active Machine session."
-      # Show last session from history if available
-      if [ -f "$SCRIPT_DIR/.machine.history" ]; then
-        LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
-        LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
-        if [ -f "$LAST_DIR/summary.json" ]; then
-          echo "[*] Last session summary:"
-          cat "$LAST_DIR/summary.json"
-        fi
+      if [ -n "$LAST_DIR" ] && [ -f "$LAST_DIR/summary.json" ]; then
+        echo "[*] Last session summary:"
+        cat "$LAST_DIR/summary.json"
       fi
       exit $EXIT_CLEAN
     fi
 
     RUNNING_PID="$(cat "$PID_FILE")"
     if kill -0 "$RUNNING_PID" 2>/dev/null; then
+      NOW_TS="$(date +%s)"
+      ELAPSED=""
+      if [ -n "$LAST_START_TS" ] && [ "$LAST_START_TS" -gt 0 ] 2>/dev/null; then
+        ELAPSED_SECS=$((NOW_TS - LAST_START_TS))
+        ELAPSED="$(format_elapsed $ELAPSED_SECS)"
+      fi
+
       echo "[*] Machine session ACTIVE"
-      echo "    PID: $RUNNING_PID"
-      # Find report dir from history
-      if [ -f "$SCRIPT_DIR/.machine.history" ]; then
-        LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
-        LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
-        LAST_MODE="$(echo "$LAST" | awk '{print $4}')"
-        echo "    Mode: $LAST_MODE"
-        echo "    Report: $LAST_DIR"
-        if [ -f "$LAST_DIR/session.log" ]; then
-          local_lines=$(wc -l < "$LAST_DIR/session.log" 2>/dev/null || echo 0)
-          echo "    Log lines: $local_lines"
-        fi
+      echo "    PID:      $RUNNING_PID"
+      [ -n "$LAST_MODE" ] && echo "    Mode:     $LAST_MODE"
+      [ -n "$ELAPSED" ] && echo "    Elapsed:  $ELAPSED"
+      [ -n "$LAST_DIR" ] && echo "    Report:   $LAST_DIR"
+      if [ -n "$LAST_DIR" ] && [ -f "$LAST_DIR/session.log" ]; then
+        LOG_LINES=$(wc -l < "$LAST_DIR/session.log" 2>/dev/null || echo 0)
+        LOG_SIZE=$(du -h "$LAST_DIR/session.log" 2>/dev/null | awk '{print $1}')
+        echo "    Log:      $LOG_LINES lines ($LOG_SIZE)"
       fi
     else
       echo "[*] Machine session FINISHED (stale PID: $RUNNING_PID)"
       rm -f "$PID_FILE"
-      if [ -f "$SCRIPT_DIR/.machine.history" ]; then
-        LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
-        LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
-        if [ -f "$LAST_DIR/summary.json" ]; then
-          echo "[*] Session summary:"
-          cat "$LAST_DIR/summary.json"
-        fi
+      if [ -n "$LAST_DIR" ] && [ -f "$LAST_DIR/summary.json" ]; then
+        echo "[*] Session summary:"
+        cat "$LAST_DIR/summary.json"
+      fi
+    fi
+    ;;
+
+  stop|kill)
+    # Kill active Machine session and all child claude processes
+    if [ ! -f "$PID_FILE" ]; then
+      # Check for orphaned claude -p processes anyway
+      ORPHANS=$(pgrep -f "claude -p.*Machine Orchestrator" 2>/dev/null || true)
+      if [ -n "$ORPHANS" ]; then
+        echo "[*] No PID file, but found orphaned Machine processes:"
+        echo "$ORPHANS" | while read pid; do
+          echo "    Killing PID $pid"
+          kill "$pid" 2>/dev/null || true
+        done
+        sleep 1
+        # Force kill if still alive
+        echo "$ORPHANS" | while read pid; do
+          kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && echo "    Force killed PID $pid" || true
+        done
+        echo "[*] Orphaned processes cleaned up."
+      else
+        echo "[*] No active Machine session to stop."
+      fi
+      exit $EXIT_CLEAN
+    fi
+
+    RUNNING_PID="$(cat "$PID_FILE")"
+    echo "[*] Stopping Machine session (PID: $RUNNING_PID)..."
+
+    # Kill the nohup wrapper
+    kill "$RUNNING_PID" 2>/dev/null || true
+
+    # Kill any child claude -p processes
+    CHILD_PIDS=$(pgrep -f "claude -p.*Machine Orchestrator" 2>/dev/null || true)
+    if [ -n "$CHILD_PIDS" ]; then
+      echo "$CHILD_PIDS" | while read pid; do
+        echo "    Killing claude process PID $pid"
+        kill "$pid" 2>/dev/null || true
+      done
+    fi
+
+    # Kill stream_parser.py if running
+    pkill -f "stream_parser.py" 2>/dev/null || true
+
+    sleep 1
+
+    # Force kill anything still alive
+    kill -0 "$RUNNING_PID" 2>/dev/null && kill -9 "$RUNNING_PID" 2>/dev/null && echo "    Force killed wrapper PID $RUNNING_PID" || true
+    if [ -n "$CHILD_PIDS" ]; then
+      echo "$CHILD_PIDS" | while read pid; do
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && echo "    Force killed PID $pid" || true
+      done
+    fi
+
+    rm -f "$PID_FILE"
+    echo "[*] Session stopped."
+
+    # Show partial results if available
+    if [ -f "$SCRIPT_DIR/.machine.history" ]; then
+      LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
+      LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
+      if [ -f "$LAST_DIR/session.log" ]; then
+        LOG_LINES=$(wc -l < "$LAST_DIR/session.log" 2>/dev/null || echo 0)
+        echo "    Log saved: $LAST_DIR/session.log ($LOG_LINES lines)"
       fi
     fi
     ;;
@@ -660,13 +786,15 @@ PROMPT
   help|--help|-h)
     show_banner "Help"
     echo "Usage:"
-    echo "  ./machine.sh [flags] ctf <challenge> [category]      Solve CTF (flag capture priority)"
-    echo "  ./machine.sh [flags] learn <challenge> [category]    Solve + writeup + DB 저장 (학습 모드)"
+    echo "  ./machine.sh [flags] ctf <challenge> [category] [server]   Solve CTF"
+    echo "  ./machine.sh [flags] learn <challenge> [category] [server]  Solve + writeup + DB 저장"
     echo ""
     echo "Categories: pwn, rev, web, crypto, forensics, web3 (생략 시 자동 감지)"
+    echo "Server:     http://host:port or host:port (웹/pwn 문제의 접속 대상)"
     echo "  ./machine.sh learn --import <file|dir|url>           기존 writeup 임포트"
     echo "  ./machine.sh learn --reindex                         Knowledge DB 재인덱싱"
     echo "  ./machine.sh status                                  Check running session"
+    echo "  ./machine.sh stop                                    Stop running session"
     echo "  ./machine.sh logs                                    Tail latest session log"
     echo ""
     echo "Global flags:"
