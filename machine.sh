@@ -358,6 +358,38 @@ SESSION_STATUS='completed'
 [ "\$CLAUDE_EXIT" -ne 0 ] 2>/dev/null && SESSION_STATUS='failed'
 bash "\$SCRIPT_DIR/machine.sh" _summary "\$REPORT_DIR" ctf "\$CHALLENGE_DIR" "\$START_TS" "\$FINAL_EXIT" "\$SESSION_STATUS" 2>/dev/null || true
 
+# === Terminal notification ===
+END_TS=\$(date +%s)
+ELAPSED=\$(( END_TS - START_TS ))
+MINS=\$(( ELAPSED / 60 ))
+SECS=\$(( ELAPSED % 60 ))
+
+NOTIFY_FILE="\$REPORT_DIR/result.txt"
+echo "" > "\$NOTIFY_FILE"
+echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
+echo "  MACHINE — CTF Session Complete" >> "\$NOTIFY_FILE"
+echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
+echo "  Challenge: \$(basename "\$CHALLENGE_DIR")" >> "\$NOTIFY_FILE"
+echo "  Duration:  \${MINS}m \${SECS}s" >> "\$NOTIFY_FILE"
+echo "  Status:    \$SESSION_STATUS" >> "\$NOTIFY_FILE"
+if [ -n "\$FLAGS" ]; then
+  echo "" >> "\$NOTIFY_FILE"
+  echo "  ✓ FLAG CAPTURED:" >> "\$NOTIFY_FILE"
+  echo "\$FLAGS" | while read f; do echo "    \$f" >> "\$NOTIFY_FILE"; done
+else
+  echo "" >> "\$NOTIFY_FILE"
+  echo "  ✗ No flags found" >> "\$NOTIFY_FILE"
+fi
+echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
+
+# Print to session.log
+cat "\$NOTIFY_FILE" >> "\$REPORT_DIR/session.log"
+
+# Try to notify user's terminal
+for tty in /dev/pts/*; do
+  [ -w "\$tty" ] && cat "\$NOTIFY_FILE" > "\$tty" 2>/dev/null && printf '\a' > "\$tty" 2>/dev/null || true
+done
+
 rm -f "\$PID_FILE"
 RUNNER_EOF
     chmod +x "$RUNNER"
@@ -623,6 +655,42 @@ SESSION_STATUS='completed'
 [ "\$CLAUDE_EXIT" -eq 124 ] 2>/dev/null && SESSION_STATUS='timeout'
 [ "\$CLAUDE_EXIT" -ne 0 ] 2>/dev/null && SESSION_STATUS='failed'
 bash "\$SCRIPT_DIR/machine.sh" _summary "\$REPORT_DIR" learn "\$CHALLENGE_DIR" "\$START_TS" "\$FINAL_EXIT" "\$SESSION_STATUS" 2>/dev/null || true
+
+# === Terminal notification ===
+END_TS=\$(date +%s)
+ELAPSED=\$(( END_TS - START_TS ))
+MINS=\$(( ELAPSED / 60 ))
+SECS=\$(( ELAPSED % 60 ))
+
+NOTIFY_FILE="\$REPORT_DIR/result.txt"
+echo "" > "\$NOTIFY_FILE"
+echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
+echo "  MACHINE — Learn Session Complete" >> "\$NOTIFY_FILE"
+echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
+echo "  Challenge: \$(basename "\$CHALLENGE_DIR")" >> "\$NOTIFY_FILE"
+echo "  Duration:  \${MINS}m \${SECS}s" >> "\$NOTIFY_FILE"
+echo "  Status:    \$SESSION_STATUS" >> "\$NOTIFY_FILE"
+if [ -n "\$FLAGS" ]; then
+  echo "" >> "\$NOTIFY_FILE"
+  echo "  ✓ FLAG CAPTURED:" >> "\$NOTIFY_FILE"
+  echo "\$FLAGS" | while read f; do echo "    \$f" >> "\$NOTIFY_FILE"; done
+else
+  echo "" >> "\$NOTIFY_FILE"
+  echo "  ✗ No flags found" >> "\$NOTIFY_FILE"
+fi
+if [ -s "\$WRITEUP_FILE" ]; then
+  echo "  ✓ Writeup saved: \$WRITEUP_FILE" >> "\$NOTIFY_FILE"
+else
+  echo "  ✗ Writeup not generated" >> "\$NOTIFY_FILE"
+fi
+echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
+
+cat "\$NOTIFY_FILE" >> "\$REPORT_DIR/session.log"
+
+for tty in /dev/pts/*; do
+  [ -w "\$tty" ] && cat "\$NOTIFY_FILE" > "\$tty" 2>/dev/null && printf '\a' > "\$tty" 2>/dev/null || true
+done
+
 rm -f "\$PID_FILE"
 RUNNER_EOF
     chmod +x "$RUNNER"
