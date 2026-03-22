@@ -20,8 +20,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODEL="${MACHINE_MODEL:-opus}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 REPORT_DIR="$SCRIPT_DIR/reports/$TIMESTAMP"
-PID_FILE="$SCRIPT_DIR/.machine.pid"
-LOG_FILE="$SCRIPT_DIR/.machine.log"
+PID_DIR="$SCRIPT_DIR/.machine.pids"
+mkdir -p "$PID_DIR"
+# Legacy single PID file (for backward compat cleanup)
+OLD_PID_FILE="$SCRIPT_DIR/.machine.pid"
+[ -f "$OLD_PID_FILE" ] && rm -f "$OLD_PID_FILE"
 
 # --- Parse global flags ---
 JSON_OUTPUT=false
@@ -199,6 +202,8 @@ case "$MODE" in
     CHALLENGE_DIR="$(extract_if_zip "$(realpath "$TARGET")")"
     CATEGORY="${SCOPE:-}"
     FILES=$(ls -1 "$CHALLENGE_DIR" 2>/dev/null | head -30)
+    SESSION_ID="$TIMESTAMP"
+    PID_FILE="$PID_DIR/${SESSION_ID}.pid"
     mkdir -p "$REPORT_DIR"
 
     # Validate category if provided
@@ -328,6 +333,7 @@ PID_FILE="$PID_FILE"
 MODEL="$MODEL"
 CHALLENGE_DIR="$CHALLENGE_DIR"
 TIMEOUT_VAL=$TIMEOUT
+MY_TTY="$(tty 2>/dev/null || echo '')"
 
 CLAUDE_CMD="claude -p"
 if [ "\$TIMEOUT_VAL" -gt 0 ] 2>/dev/null; then
@@ -386,9 +392,11 @@ echo "════════════════════════�
 cat "\$NOTIFY_FILE" >> "\$REPORT_DIR/session.log"
 
 # Try to notify user's terminal
-for tty in /dev/pts/*; do
-  [ -w "\$tty" ] && cat "\$NOTIFY_FILE" > "\$tty" 2>/dev/null && printf '\a' > "\$tty" 2>/dev/null || true
-done
+# Notify only the terminal that started this session
+if [ -n "\$MY_TTY" ] && [ -w "\$MY_TTY" ]; then
+  cat "\$NOTIFY_FILE" > "\$MY_TTY" 2>/dev/null
+  printf '\a' > "\$MY_TTY" 2>/dev/null
+fi
 
 rm -f "\$PID_FILE"
 RUNNER_EOF
@@ -496,6 +504,8 @@ RUNNER_EOF
     CATEGORY="${SCOPE:-}"
     FILES=$(ls -1 "$CHALLENGE_DIR" 2>/dev/null | head -30)
     WRITEUP_FILE="$CHALLENGES_DIR/${CHALLENGE_NAME}.md"
+    SESSION_ID="$TIMESTAMP"
+    PID_FILE="$PID_DIR/${SESSION_ID}.pid"
     mkdir -p "$REPORT_DIR"
 
     # Validate category if provided
@@ -624,6 +634,7 @@ CHALLENGE_DIR="$CHALLENGE_DIR"
 WRITEUP_FILE="$WRITEUP_FILE"
 KNOWLEDGE_PY="$KNOWLEDGE_PY"
 TIMEOUT_VAL=$TIMEOUT
+MY_TTY="$(tty 2>/dev/null || echo '')"
 
 CLAUDE_CMD="claude -p"
 if [ "\$TIMEOUT_VAL" -gt 0 ] 2>/dev/null; then
@@ -687,9 +698,11 @@ echo "════════════════════════�
 
 cat "\$NOTIFY_FILE" >> "\$REPORT_DIR/session.log"
 
-for tty in /dev/pts/*; do
-  [ -w "\$tty" ] && cat "\$NOTIFY_FILE" > "\$tty" 2>/dev/null && printf '\a' > "\$tty" 2>/dev/null || true
-done
+# Notify only the terminal that started this session
+if [ -n "\$MY_TTY" ] && [ -w "\$MY_TTY" ]; then
+  cat "\$NOTIFY_FILE" > "\$MY_TTY" 2>/dev/null
+  printf '\a' > "\$MY_TTY" 2>/dev/null
+fi
 
 rm -f "\$PID_FILE"
 RUNNER_EOF
@@ -713,18 +726,6 @@ RUNNER_EOF
     ;;
 
   status)
-    # Parse last history entry
-    LAST_START_TS=""
-    LAST_DIR=""
-    LAST_MODE=""
-    if [ -f "$SCRIPT_DIR/.machine.history" ]; then
-      LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
-      LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
-      LAST_MODE="$(echo "$LAST" | awk '{print $4}')"
-      LAST_START_TS="$(echo "$LAST" | awk '{print $5}')"
-    fi
-
-    # Calculate elapsed time
     format_elapsed() {
       local secs="$1"
       local mins=$((secs / 60))
@@ -740,124 +741,205 @@ RUNNER_EOF
       fi
     }
 
-    if [ ! -f "$PID_FILE" ]; then
-      echo "[*] No active Machine session."
-      if [ -n "$LAST_DIR" ] && [ -f "$LAST_DIR/summary.json" ]; then
-        echo "[*] Last session summary:"
-        cat "$LAST_DIR/summary.json"
-      fi
-      exit $EXIT_CLEAN
-    fi
+    ACTIVE_COUNT=0
+    STALE_COUNT=0
 
-    RUNNING_PID="$(cat "$PID_FILE")"
-    if kill -0 "$RUNNING_PID" 2>/dev/null; then
-      NOW_TS="$(date +%s)"
-      ELAPSED=""
-      if [ -n "$LAST_START_TS" ] && [ "$LAST_START_TS" -gt 0 ] 2>/dev/null; then
-        ELAPSED_SECS=$((NOW_TS - LAST_START_TS))
-        ELAPSED="$(format_elapsed $ELAPSED_SECS)"
+    for pidfile in "$PID_DIR"/*.pid; do
+      [ -f "$pidfile" ] || continue
+      SID="$(basename "$pidfile" .pid)"
+      SPID="$(cat "$pidfile")"
+
+      # Find matching history entry
+      S_DIR="" S_MODE="" S_START=""
+      if [ -f "$SCRIPT_DIR/.machine.history" ]; then
+        HLINE="$(grep "$SID" "$SCRIPT_DIR/.machine.history" | tail -1)"
+        if [ -n "$HLINE" ]; then
+          S_DIR="$(echo "$HLINE" | awk '{print $2}')"
+          S_MODE="$(echo "$HLINE" | awk '{print $4}')"
+          S_START="$(echo "$HLINE" | awk '{print $5}')"
+        fi
       fi
 
-      echo "[*] Machine session ACTIVE"
-      echo "    PID:      $RUNNING_PID"
-      [ -n "$LAST_MODE" ] && echo "    Mode:     $LAST_MODE"
-      [ -n "$ELAPSED" ] && echo "    Elapsed:  $ELAPSED"
-      [ -n "$LAST_DIR" ] && echo "    Report:   $LAST_DIR"
-      if [ -n "$LAST_DIR" ] && [ -f "$LAST_DIR/session.log" ]; then
-        LOG_LINES=$(wc -l < "$LAST_DIR/session.log" 2>/dev/null || echo 0)
-        LOG_SIZE=$(du -h "$LAST_DIR/session.log" 2>/dev/null | awk '{print $1}')
-        echo "    Log:      $LOG_LINES lines ($LOG_SIZE)"
+      if kill -0 "$SPID" 2>/dev/null; then
+        ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
+        NOW_TS="$(date +%s)"
+        ELAPSED=""
+        if [ -n "$S_START" ] && [ "$S_START" -gt 0 ] 2>/dev/null; then
+          ELAPSED="$(format_elapsed $((NOW_TS - S_START)))"
+        fi
+        CHALLENGE_NAME=""
+        [ -n "$S_DIR" ] && CHALLENGE_NAME="$(basename "$(grep "$SID" "$SCRIPT_DIR/.machine.history" | awk '{print $2}')" 2>/dev/null)"
+
+        echo "[*] Session ACTIVE [$SID]"
+        echo "    PID:       $SPID"
+        [ -n "$S_MODE" ] && echo "    Mode:      $S_MODE"
+        [ -n "$CHALLENGE_NAME" ] && echo "    Challenge: $CHALLENGE_NAME"
+        [ -n "$ELAPSED" ] && echo "    Elapsed:   $ELAPSED"
+        [ -n "$S_DIR" ] && echo "    Report:    $S_DIR"
+        if [ -n "$S_DIR" ] && [ -f "$S_DIR/session.log" ]; then
+          LOG_LINES=$(wc -l < "$S_DIR/session.log" 2>/dev/null || echo 0)
+          LOG_SIZE=$(du -h "$S_DIR/session.log" 2>/dev/null | awk '{print $1}')
+          echo "    Log:       $LOG_LINES lines ($LOG_SIZE)"
+        fi
+        echo ""
+      else
+        STALE_COUNT=$((STALE_COUNT + 1))
+        echo "[*] Session FINISHED [$SID] (stale PID: $SPID)"
+        rm -f "$pidfile"
+        if [ -n "$S_DIR" ] && [ -f "$S_DIR/summary.json" ]; then
+          # Show flags if found
+          FOUND_FLAGS="$(python3 -c "import json; d=json.load(open('$S_DIR/summary.json')); flags=d.get('flags_found',[]); print(' '.join(flags)) if flags else None" 2>/dev/null || true)"
+          if [ -n "$FOUND_FLAGS" ]; then
+            echo "    FLAGS: $FOUND_FLAGS"
+          fi
+          DUR="$(python3 -c "import json; print(json.load(open('$S_DIR/summary.json')).get('duration_seconds',0))" 2>/dev/null || echo "?")"
+          echo "    Duration: ${DUR}s"
+        fi
+        echo ""
+      fi
+    done
+
+    if [ "$ACTIVE_COUNT" -eq 0 ] && [ "$STALE_COUNT" -eq 0 ]; then
+      echo "[*] No active Machine sessions."
+      # Show last session from history
+      if [ -f "$SCRIPT_DIR/.machine.history" ]; then
+        LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
+        LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
+        if [ -n "$LAST_DIR" ] && [ -f "$LAST_DIR/summary.json" ]; then
+          echo "[*] Last session:"
+          cat "$LAST_DIR/summary.json"
+        fi
       fi
     else
-      echo "[*] Machine session FINISHED (stale PID: $RUNNING_PID)"
-      rm -f "$PID_FILE"
-      if [ -n "$LAST_DIR" ] && [ -f "$LAST_DIR/summary.json" ]; then
-        echo "[*] Session summary:"
-        cat "$LAST_DIR/summary.json"
-      fi
+      echo "[*] Total: $ACTIVE_COUNT active, $STALE_COUNT finished"
     fi
     ;;
 
   stop|kill)
-    # Kill active Machine session and all child claude processes
-    if [ ! -f "$PID_FILE" ]; then
-      # Check for orphaned claude -p processes anyway
-      ORPHANS=$(pgrep -f "claude -p.*Machine Orchestrator" 2>/dev/null || true)
-      if [ -n "$ORPHANS" ]; then
-        echo "[*] No PID file, but found orphaned Machine processes:"
-        echo "$ORPHANS" | while read pid; do
-          echo "    Killing PID $pid"
-          kill "$pid" 2>/dev/null || true
-        done
-        sleep 1
-        # Force kill if still alive
-        echo "$ORPHANS" | while read pid; do
-          kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && echo "    Force killed PID $pid" || true
-        done
-        echo "[*] Orphaned processes cleaned up."
-      else
-        echo "[*] No active Machine session to stop."
+    # Optional: stop specific session by ID
+    STOP_TARGET="${TARGET:-}"
+
+    ACTIVE_PIDS=()
+    for pidfile in "$PID_DIR"/*.pid; do
+      [ -f "$pidfile" ] || continue
+      SID="$(basename "$pidfile" .pid)"
+      SPID="$(cat "$pidfile")"
+
+      # If specific session requested, skip others
+      if [ -n "$STOP_TARGET" ] && [ "$SID" != "$STOP_TARGET" ] && [ "$SPID" != "$STOP_TARGET" ]; then
+        continue
       fi
-      exit $EXIT_CLEAN
-    fi
 
-    RUNNING_PID="$(cat "$PID_FILE")"
-    echo "[*] Stopping Machine session (PID: $RUNNING_PID)..."
+      if kill -0 "$SPID" 2>/dev/null; then
+        echo "[*] Stopping session [$SID] (PID: $SPID)..."
+        kill "$SPID" 2>/dev/null || true
+        ACTIVE_PIDS+=("$SPID")
+      else
+        echo "[*] Session [$SID] already finished, cleaning up PID file."
+      fi
+      rm -f "$pidfile"
+    done
 
-    # Kill the nohup wrapper
-    kill "$RUNNING_PID" 2>/dev/null || true
-
-    # Kill any child claude -p processes
+    # Kill child claude -p processes
     CHILD_PIDS=$(pgrep -f "claude -p.*Machine Orchestrator" 2>/dev/null || true)
     if [ -n "$CHILD_PIDS" ]; then
       echo "$CHILD_PIDS" | while read pid; do
-        echo "    Killing claude process PID $pid"
+        # If specific session, only kill children of that session
+        if [ -n "$STOP_TARGET" ]; then
+          # Check if this pid is a child of one of our active pids
+          DOMINATED=false
+          for ap in "${ACTIVE_PIDS[@]}"; do
+            if pgrep -P "$ap" 2>/dev/null | grep -q "$pid"; then
+              DOMINATED=true; break
+            fi
+          done
+          [ "$DOMINATED" = false ] && continue
+        fi
+        echo "    Killing claude PID $pid"
         kill "$pid" 2>/dev/null || true
       done
     fi
 
-    # Kill stream_parser.py if running
-    pkill -f "stream_parser.py" 2>/dev/null || true
+    # Kill stream_parser.py
+    if [ -z "$STOP_TARGET" ]; then
+      pkill -f "stream_parser.py" 2>/dev/null || true
+    fi
 
     sleep 1
 
-    # Force kill anything still alive
-    kill -0 "$RUNNING_PID" 2>/dev/null && kill -9 "$RUNNING_PID" 2>/dev/null && echo "    Force killed wrapper PID $RUNNING_PID" || true
-    if [ -n "$CHILD_PIDS" ]; then
-      echo "$CHILD_PIDS" | while read pid; do
-        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && echo "    Force killed PID $pid" || true
-      done
-    fi
+    # Force kill
+    for pid in "${ACTIVE_PIDS[@]}"; do
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && echo "    Force killed PID $pid" || true
+    done
 
-    rm -f "$PID_FILE"
-    echo "[*] Session stopped."
-
-    # Show partial results if available
-    if [ -f "$SCRIPT_DIR/.machine.history" ]; then
-      LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
-      LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
-      if [ -f "$LAST_DIR/session.log" ]; then
-        LOG_LINES=$(wc -l < "$LAST_DIR/session.log" 2>/dev/null || echo 0)
-        echo "    Log saved: $LAST_DIR/session.log ($LOG_LINES lines)"
+    if [ "${#ACTIVE_PIDS[@]}" -eq 0 ]; then
+      # Check orphans
+      ORPHANS=$(pgrep -f "claude -p.*Machine Orchestrator" 2>/dev/null || true)
+      if [ -n "$ORPHANS" ]; then
+        echo "[*] Found orphaned processes:"
+        echo "$ORPHANS" | while read pid; do
+          echo "    Killing PID $pid"
+          kill "$pid" 2>/dev/null || true
+        done
+      else
+        echo "[*] No active sessions to stop."
       fi
+    else
+      echo "[*] ${#ACTIVE_PIDS[@]} session(s) stopped."
     fi
     ;;
 
   logs)
-    # Find latest session.log
-    if [ -f "$SCRIPT_DIR/.machine.history" ]; then
-      LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
-      LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
-      if [ -f "$LAST_DIR/session.log" ]; then
-        echo "[*] Tailing: $LAST_DIR/session.log"
-        tail -f "$LAST_DIR/session.log"
+    # Optional: logs <session_id> to tail specific session
+    LOG_TARGET="${TARGET:-}"
+
+    if [ -n "$LOG_TARGET" ]; then
+      # Specific session
+      LOG_DIR="$SCRIPT_DIR/reports/$LOG_TARGET"
+      if [ -f "$LOG_DIR/session.log" ]; then
+        echo "[*] Tailing: $LOG_DIR/session.log"
+        tail -f "$LOG_DIR/session.log"
       else
-        echo "[!] No session.log found at $LAST_DIR"
+        echo "[!] No session.log found for session $LOG_TARGET"
         exit $EXIT_ERROR
       fi
     else
-      echo "[!] No session history found. Run a ctf session first."
-      exit $EXIT_ERROR
+      # All active sessions — tail latest, or list if multiple active
+      ACTIVE_LOGS=()
+      for pidfile in "$PID_DIR"/*.pid; do
+        [ -f "$pidfile" ] || continue
+        SPID="$(cat "$pidfile")"
+        kill -0 "$SPID" 2>/dev/null || continue
+        SID="$(basename "$pidfile" .pid)"
+        SLOG="$SCRIPT_DIR/reports/$SID/session.log"
+        [ -f "$SLOG" ] && ACTIVE_LOGS+=("$SLOG")
+      done
+
+      if [ "${#ACTIVE_LOGS[@]}" -gt 1 ]; then
+        echo "[*] Multiple active sessions. Tailing all:"
+        for l in "${ACTIVE_LOGS[@]}"; do echo "    $l"; done
+        echo ""
+        tail -f "${ACTIVE_LOGS[@]}"
+      elif [ "${#ACTIVE_LOGS[@]}" -eq 1 ]; then
+        echo "[*] Tailing: ${ACTIVE_LOGS[0]}"
+        tail -f "${ACTIVE_LOGS[0]}"
+      else
+        # No active, show latest from history
+        if [ -f "$SCRIPT_DIR/.machine.history" ]; then
+          LAST="$(tail -1 "$SCRIPT_DIR/.machine.history")"
+          LAST_DIR="$(echo "$LAST" | awk '{print $2}')"
+          if [ -f "$LAST_DIR/session.log" ]; then
+            echo "[*] No active sessions. Showing last: $LAST_DIR/session.log"
+            tail -f "$LAST_DIR/session.log"
+          else
+            echo "[!] No session.log found"
+            exit $EXIT_ERROR
+          fi
+        else
+          echo "[!] No session history found."
+          exit $EXIT_ERROR
+        fi
+      fi
     fi
     ;;
 
@@ -871,9 +953,9 @@ RUNNER_EOF
     echo "Server:     http://host:port or host:port (웹/pwn 문제의 접속 대상)"
     echo "  ./machine.sh learn --import <file|dir|url>           기존 writeup 임포트"
     echo "  ./machine.sh learn --reindex                         Knowledge DB 재인덱싱"
-    echo "  ./machine.sh status                                  Check running session"
-    echo "  ./machine.sh stop                                    Stop running session"
-    echo "  ./machine.sh logs                                    Tail latest session log"
+    echo "  ./machine.sh status                                  Check all sessions"
+    echo "  ./machine.sh stop [session_id|pid]                   Stop session(s)"
+    echo "  ./machine.sh logs [session_id]                       Tail session log(s)"
     echo ""
     echo "Global flags:"
     echo "  --json       Output in JSON format"
