@@ -1,0 +1,105 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(cd:*)",
+      "Bash(ls:*)",
+      "Bash(file:*)",
+      "Bash(strings:*)",
+      "Bash(checksec:*)",
+      "Bash(readelf:*)",
+      "Bash(objdump:*)",
+      "Bash(nm:*)",
+      "Bash(gdb:*)",
+      "Bash(strace:*)",
+      "Bash(ltrace:*)",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(cat:*)",
+      "Bash(unzip:*)",
+      "Bash(tar:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(chmod:*)",
+      "Bash(echo:*)",
+      "Bash(printf:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(xxd:*)",
+      "Bash(hexdump:*)",
+      "Bash(od:*)",
+      "Bash(diff:*)",
+      "Bash(sort:*)",
+      "Bash(base64:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(nc:*)",
+      "Bash(ncat:*)",
+      "Bash(gcc:*)",
+      "Bash(g++:*)",
+      "Bash(make:*)",
+      "Bash(ROPgadget:*)",
+      "Bash(one_gadget:*)",
+      "Bash(patchelf:*)",
+      "Bash(ldd:*)",
+      "Bash(tee:*)",
+      "Bash(timeout:*)",
+      "Bash(ln:*)",
+      "Bash(realpath:*)",
+      "Bash(basename:*)",
+      "Bash(dirname:*)",
+      "Bash(jq:*)",
+      "Bash(git:*)",
+      "Bash(sage:*)",
+      "Bash(hashcat:*)",
+      "Bash(john:*)",
+      "Bash(sqlmap:*)",
+      "Bash(ffuf:*)",
+      "Bash(binwalk:*)",
+      "Bash(exiftool:*)",
+      "Bash(steghide:*)",
+      "Bash(zsteg:*)",
+      "Bash(tshark:*)",
+      "Bash(vol3:*)",
+      "Bash(slither:*)",
+      "Bash(forge:*)",
+      "Bash(cast:*)",
+      "Bash(anvil:*)",
+      "Bash(~/exploitdb/searchsploit:*)",
+      "Bash(~/tools/rp++:*)",
+      "WebSearch",
+      "WebFetch(domain:r.jina.ai)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git -C \"$(dirname \"$0\")\" rev-parse --show-toplevel 2>/dev/null || echo .)\"/.claude/hooks/knowledge_inject.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git -C \"$(dirname \"$0\")\" rev-parse --show-toplevel 2>/dev/null || echo .)\"/.claude/hooks/check_agent_completion.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
