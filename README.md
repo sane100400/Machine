@@ -2,6 +2,8 @@
 
 > CTF 자율 해결 에이전트 시스템 — Claude Code 기반 멀티 에이전트 파이프라인
 
+[![EK-Machine](https://img.shields.io/badge/🎵_EK--Machine-YouTube-red?style=flat)](https://www.youtube.com/watch?v=TFZOIueIBmU)
+
 ---
 
 ## 개요
