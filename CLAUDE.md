@@ -7,7 +7,7 @@
 
 ## Mandatory Rules (NEVER VIOLATE)
 
-1. **Use Agent Teams for CTF.** Never solve directly. Spawn agents via `subagent_type="<role>"` from `.claude/agents/*.md`. Exception: trivial problems (source provided, vuln visible in 1-3 lines, one-liner exploit, <5min) → use `ctf-solver` agent.
+1. **Use Agent Teams for CTF.** Never solve directly. Spawn agents via `subagent_type="<role>"` from `.claude/agents/*.md`.
 2. **Local flag files are FAKE.** Only `remote(host, port)` yields real flags.
 3. **Read `knowledge/index.md` before starting.** Check already solved/attempted challenges.
 4. **Record all results (success/failure) to `knowledge/challenges/`.**
@@ -18,32 +18,27 @@
 
 ```
 CTF Pipeline (by category):
-  pwn:      pwn-reverser → pwn-trigger → pwn-chain → critic → verifier → reporter
-  rev:      rev-reverser → rev-solver → critic → verifier → reporter
-  web:      web-ctf → [crypto-solver] → critic → verifier → reporter
-  crypto:   crypto-solver → critic → verifier → reporter
-  forensics: forensics → [rev-solver] → critic → verifier → reporter
-  web3:     web3-auditor → critic → verifier → reporter
-  trivial:  ctf-solver (single agent, skip pipeline)
+  pwn:      pwn → critic → verifier → reporter
+  rev:      rev → critic → verifier → reporter
+  web:      web → critic → verifier → reporter
+  crypto:   crypto → critic → verifier → reporter
+  forensics: forensics → critic → verifier → reporter
+  web3:     web3 → critic → verifier → reporter
 ```
 
-### Agent Model Assignment (MANDATORY)
+### Agent Model Assignment (MANDATORY — all opus)
 
 | Agent | Model | Category |
 |-------|-------|----------|
-| pwn-reverser | sonnet | PWN — binary analysis, protection mapping |
-| pwn-trigger | sonnet | PWN — crash finding, primitive confirmation |
-| pwn-chain | opus | PWN — exploit chain (ROP, heap, FSOP) |
-| rev-reverser | sonnet | REV — algorithm recovery, anti-debug bypass |
-| rev-solver | opus | REV — inverse computation, z3/angr |
-| web-ctf | sonnet | WEB — SQLi, SSTI, SSRF, LFI, deserialization |
-| crypto-solver | opus | CRYPTO — RSA, XOR, AES attacks, hash cracking |
-| forensics | sonnet | FORENSICS — stego, PCAP, memory, disk |
-| web3-auditor | opus | WEB3 — smart contract analysis + Foundry PoC |
+| pwn | opus | PWN — full pipeline: Ghidra + GDB + pwntools + ROPgadget |
+| rev | opus | REV — full pipeline: Ghidra + GDB + Frida + z3 + angr |
+| web | opus | WEB — SQLi, SSTI, SSRF, LFI, deserialization, ffuf, sqlmap |
+| crypto | opus | CRYPTO — RSA, XOR, AES attacks, SageMath, hashcat |
+| forensics | opus | FORENSICS — stego, PCAP, memory, disk, binwalk, volatility3 |
+| web3 | opus | WEB3 — Slither + Mythril + Foundry + cast |
 | critic | opus | ALL — cross-verification |
-| verifier | sonnet | ALL — flag confirmation |
-| reporter | sonnet | ALL — writeup |
-| ctf-solver | sonnet | ALL — trivial one-liner problems |
+| verifier | opus | ALL — flag confirmation |
+| reporter | opus | ALL — writeup |
 
 ### Structured Handoff Protocol
 
@@ -98,7 +93,7 @@ Set `CHALLENGE_DIR=<challenge_dir>` before every call.
 ```bash
 # Record a fact — --src MUST point to the real tool output file
 python3 /path/to/Machine/tools/state.py set --key base_addr --val 0x400000 \
-    --src ghidra_out.txt --agent pwn-reverser
+    --src ghidra_out.txt --agent pwn
 
 # Read a fact
 python3 tools/state.py get --key base_addr
@@ -121,16 +116,16 @@ All work agents must use `state.py checkpoint` (not manual JSON writes):
 
 ```bash
 # On start
-python3 tools/state.py checkpoint --agent pwn-reverser --phase 1 \
+python3 tools/state.py checkpoint --agent pwn --phase 1 \
     --phase-name binary_analysis --status in_progress
 
 # On phase complete
-python3 tools/state.py checkpoint --agent pwn-reverser --phase 2 \
+python3 tools/state.py checkpoint --agent pwn --phase 2 \
     --phase-name gdb_verification --status in_progress
 
 # On full complete
-python3 tools/state.py verify --artifacts reversal_map.md   # MUST pass first
-python3 tools/state.py checkpoint --agent pwn-reverser --phase 3 --status completed
+python3 tools/state.py verify --artifacts solve.py   # MUST pass first
+python3 tools/state.py checkpoint --agent pwn --phase 3 --status completed
 ```
 
 Location: `<challenge_dir>/checkpoint.json` (written by state.py)
