@@ -27,23 +27,19 @@ CTF Pipeline (by category):
 
 ```
 
-### Agent Model Assignment (MANDATORY)
-
-**원칙:** 복잡한 추론 = opus, 도구 기반/템플릿 작업 = sonnet
-
-#### CTF Agents
+### Agent Model Assignment (MANDATORY — all opus)
 
 | Agent | Model | Category |
 |-------|-------|----------|
 | pwn | opus | PWN — full pipeline: Ghidra + GDB + pwntools + ROPgadget |
 | rev | opus | REV — full pipeline: Ghidra + GDB + Frida + z3 + angr |
-| web | sonnet | WEB — SQLi, SSTI, SSRF, LFI, deserialization, ffuf, sqlmap |
+| web | opus | WEB — SQLi, SSTI, SSRF, LFI, deserialization, ffuf, sqlmap |
 | crypto | opus | CRYPTO — RSA, XOR, AES attacks, SageMath, hashcat |
-| forensics | sonnet | FORENSICS — stego, PCAP, memory, disk, binwalk, volatility3 |
+| forensics | opus | FORENSICS — stego, PCAP, memory, disk, binwalk, volatility3 |
 | web3 | opus | WEB3 — Slither + Mythril + Foundry + cast |
 | critic | opus | ALL — cross-verification |
-| verifier | sonnet | ALL — flag confirmation (mechanical: 3x run) |
-| reporter | sonnet | ALL — writeup (template-driven) |
+| verifier | opus | ALL — flag confirmation |
+| reporter | opus | ALL — writeup |
 
 
 ### Structured Handoff Protocol

@@ -12,6 +12,8 @@
 &nbsp;
 ![Categories](https://img.shields.io/badge/Categories-6-green?style=for-the-badge)
 &nbsp;
+![Model](https://img.shields.io/badge/Model-Opus-purple?style=for-the-badge)
+&nbsp;
 ![Knowledge](https://img.shields.io/badge/Knowledge_DB-FTS5-orange?style=for-the-badge)
 
 ```
@@ -36,10 +38,13 @@
 # 2. CTF 문제 풀기 (자율 실행)
 ./machine.sh ctf ./challenge.zip
 
-# 3. 학습 모드 (풀이 + writeup 자동 생성 + DB 저장)
+# 3. 카테고리 지정해서 풀기
+./machine.sh ctf ./challenge.zip pwn
+
+# 4. 학습 모드 (풀이 + writeup 자동 생성 + DB 저장)
 ./machine.sh learn ./challenge.zip
 
-# 4. 실시간 모니터링
+# 5. 실시간 모니터링
 ./machine.sh logs
 ```
 
@@ -48,7 +53,6 @@
 ## 📋 목차
 
 - [개요](#-개요)
-- [아키텍처](#-아키텍처)
 - [실행 모드](#-실행-모드)
 - [에이전트 파이프라인](#-에이전트-파이프라인)
 - [핵심 도구](#-핵심-도구)
@@ -75,48 +79,7 @@ Machine은 CTF 문제를 **자율적으로 분석하고 풀이**하는 에이전
 | **구조적 품질 게이트** | 파이프라인 스테이지 간 `quality_gate.py`로 프로그래밍 차단 |
 | **자동 지식 주입** | 에이전트 스폰 시 관련 기법 문서 FTS5 검색 → systemMessage 주입 |
 | **Fake Idle 감지** | 에이전트 종료 시 checkpoint 기반 완료 여부 자동 검증 |
-| **비용 최적화** | 복잡한 추론(opus) vs 도구 기반 작업(sonnet) 모델 분리 |
 | **학습 루프** | learn 모드로 풀이마다 writeup 자동 생성 → DB 축적 → 다음 문제에 참조 |
-
----
-
-## 🏗 아키텍처
-
-```
-                        ┌──────────────────────┐
-                        │    Orchestrator       │
-                        │  카테고리 감지 → 파이프라인 선택  │
-                        └──────────┬───────────┘
-                                   │
-            ┌──────────────────────┼──────────────────────┐
-            ▼                      ▼                      ▼
-     ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-     │  PWN Agent   │       │  REV Agent   │       │  WEB Agent   │    ...
-     │  (opus)      │       │  (opus)      │       │  (sonnet)    │
-     └──────┬──────┘       └──────┬──────┘       └──────┬──────┘
-            ▼                      ▼                      ▼
-     ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-     │   Critic     │       │   Critic     │       │   Critic     │
-     │  (opus)      │       │  (opus)      │       │  (opus)      │
-     └──────┬──────┘       └──────┬──────┘       └──────┬──────┘
-            ▼                      ▼                      ▼
-     ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-     │  Verifier    │       │  Verifier    │       │  Verifier    │
-     │  (sonnet)    │       │  (sonnet)    │       │  (sonnet)    │
-     └──────┬──────┘       └──────┬──────┘       └──────┬──────┘
-            │                      │                      │
-            └──────────────────────┼──────────────────────┘
-                                   ▼
-                    ┌──────────────────────────┐
-                    │      state.db (SQLite)    │
-                    │  key │ value │ src │ ✓    │  ← 검증된 사실만
-                    └──────────────────────────┘
-                                   ▼
-                    ┌──────────────────────────┐
-                    │   knowledge/kb.db (FTS5)  │
-                    │  기법 + ExploitDB + Nuclei │  ← 자동 참조
-                    └──────────────────────────┘
-```
 
 ---
 
@@ -127,10 +90,15 @@ Machine은 CTF 문제를 **자율적으로 분석하고 풀이**하는 에이전
 문제를 풀어서 플래그를 획득하는 것이 목표. 속도 우선.
 
 ```bash
-./machine.sh ctf ./baby_bof.zip                    # 기본
+./machine.sh ctf ./baby_bof.zip                    # 카테고리 자동 감지
+./machine.sh ctf ./baby_bof.zip pwn                # 카테고리 직접 지정 (감지 스킵)
+./machine.sh ctf ./baby_bof.zip rev
+./machine.sh ctf ./baby_bof.zip web
+./machine.sh ctf ./baby_bof.zip crypto
+./machine.sh ctf ./baby_bof.zip forensics
+./machine.sh ctf ./baby_bof.zip web3
 ./machine.sh --timeout 1800 ctf ./baby_bof.zip     # 30분 타임아웃
-./machine.sh --dry-run ctf ./baby_bof.zip          # 미리보기
-MACHINE_MODEL=sonnet ./machine.sh ctf ./baby_bof.zip  # 모델 변경
+./machine.sh --dry-run ctf ./baby_bof.zip pwn      # 미리보기
 ```
 
 ### `learn` — 학습 모드
@@ -140,6 +108,7 @@ MACHINE_MODEL=sonnet ./machine.sh ctf ./baby_bof.zip  # 모델 변경
 
 ```bash
 ./machine.sh learn ./baby_bof.zip                  # 풀이 + writeup + DB 저장
+./machine.sh learn ./baby_bof.zip pwn              # 카테고리 지정 + 학습
 ./machine.sh learn --import ./my_writeup.md         # 기존 writeup 임포트
 ./machine.sh learn --import ~/writeups/             # 디렉토리 일괄 임포트
 ./machine.sh learn --import https://blog.example.com/writeup  # URL에서 가져오기
@@ -160,27 +129,29 @@ MACHINE_MODEL=sonnet ./machine.sh ctf ./baby_bof.zip  # 모델 변경
 ### 카테고리별 파이프라인
 
 ```
-PWN:       pwn(opus) → critic(opus) → verifier(sonnet) → reporter(sonnet)
-REV:       rev(opus) → critic(opus) → verifier(sonnet) → reporter(sonnet)
-WEB:       web(sonnet) → critic(opus) → verifier(sonnet) → reporter(sonnet)
-CRYPTO:    crypto(opus) → critic(opus) → verifier(sonnet) → reporter(sonnet)
-FORENSICS: forensics(sonnet) → critic(opus) → verifier(sonnet) → reporter(sonnet)
-WEB3:      web3(opus) → critic(opus) → verifier(sonnet) → reporter(sonnet)
+PWN:       @pwn → @critic → @verifier → @reporter
+REV:       @rev → @critic → @verifier → @reporter
+WEB:       @web → @critic → @verifier → @reporter
+CRYPTO:    @crypto → @critic → @verifier → @reporter
+FORENSICS: @forensics → @critic → @verifier → @reporter
+WEB3:      @web3 → @critic → @verifier → @reporter
 ```
+
+모든 에이전트는 **opus** 모델을 사용한다.
 
 ### 에이전트 상세
 
-| Agent | Model | 역할 | 주요 도구 |
-|-------|-------|------|----------|
-| `pwn` | opus | 바이너리 익스플로잇 | Ghidra MCP, GDB+GEF, pwntools, ROPgadget |
-| `rev` | opus | 리버스 엔지니어링 | Ghidra MCP, GDB, Frida, z3, angr |
-| `web` | sonnet | 웹 취약점 분석 | ffuf, sqlmap, dalfox, SSRFmap, Playwright |
-| `crypto` | opus | 암호 분석 | SageMath, z3, RsaCtfTool, hashcat |
-| `forensics` | sonnet | 포렌식/스테가노 | binwalk, volatility3, tshark, zsteg |
-| `web3` | opus | 스마트 컨트랙트 | Slither, Mythril, Foundry |
-| `critic` | opus | 교차 검증 | GDB/Ghidra로 모든 주소/오프셋 재검증 |
-| `verifier` | sonnet | 최종 검증 | 로컬 3회 실행 → 리모트 플래그 획득 |
-| `reporter` | sonnet | Writeup 작성 | 템플릿 기반 한국어 풀이 문서화 |
+| Agent | 역할 | 주요 도구 |
+|-------|------|----------|
+| `pwn` | 바이너리 익스플로잇 | Ghidra MCP, GDB+GEF, pwntools, ROPgadget |
+| `rev` | 리버스 엔지니어링 | Ghidra MCP, GDB, Frida, z3, angr |
+| `web` | 웹 취약점 분석 | ffuf, sqlmap, dalfox, SSRFmap, Playwright |
+| `crypto` | 암호 분석 | SageMath, z3, RsaCtfTool, hashcat |
+| `forensics` | 포렌식/스테가노 | binwalk, volatility3, tshark, zsteg |
+| `web3` | 스마트 컨트랙트 | Slither, Mythril, Foundry |
+| `critic` | 교차 검증 | GDB/Ghidra로 모든 주소/오프셋 재검증 |
+| `verifier` | 최종 검증 | 로컬 3회 실행 → 리모트 플래그 획득 |
+| `reporter` | Writeup 작성 | 템플릿 기반 한국어 풀이 문서화 |
 
 ### 품질 게이트
 
@@ -195,10 +166,7 @@ verifier → [artifact-check --stage reporter] → reporter
 ```
 
 ```bash
-# checkpoint + state.db + solve.py 검증
 python3 tools/quality_gate.py ctf-verify <challenge_dir>
-
-# 스테이지별 아티팩트 검증
 python3 tools/quality_gate.py artifact-check <challenge_dir> --stage critic
 ```
 
@@ -258,10 +226,7 @@ python3 tools/knowledge.py stats
 스테이지 간 프로그래밍적 차단. Exit 0 = PASS, Exit 1 = FAIL.
 
 ```bash
-# CTF 파이프라인 검증 (checkpoint + state.db + solve.py)
 python3 tools/quality_gate.py ctf-verify <challenge_dir>
-
-# 스테이지별 아티팩트 검증
 python3 tools/quality_gate.py artifact-check <dir> --stage critic
 python3 tools/quality_gate.py artifact-check <dir> --stage verifier
 python3 tools/quality_gate.py artifact-check <dir> --stage reporter
@@ -338,34 +303,34 @@ python3 tools/knowledge.py index-external
 
 ```
 Machine/
-├── machine.sh                       # 🚀 자율 실행 런처 (ctf / learn / status / logs)
-├── CLAUDE.md                        # 📋 오케스트레이터 규칙 + 파이프라인 정의
-├── setup.sh                         # 🔧 도구 일괄 설치 스크립트
+├── machine.sh                       # 자율 실행 런처 (ctf / learn / status / logs)
+├── CLAUDE.md                        # 오케스트레이터 규칙 + 파이프라인 정의
+├── setup.sh                         # 도구 일괄 설치 스크립트
 │
 ├── .claude/
-│   ├── agents/                      # 🤖 에이전트 정의 (9개)
-│   │   ├── pwn.md                   #    PWN: Ghidra + GDB + pwntools
-│   │   ├── rev.md                   #    REV: Ghidra + GDB + Frida + z3
-│   │   ├── web.md                   #    WEB: ffuf + sqlmap + dalfox
-│   │   ├── crypto.md                #    CRYPTO: SageMath + z3 + hashcat
-│   │   ├── forensics.md             #    FORENSICS: binwalk + volatility3
-│   │   ├── web3.md                  #    WEB3: Slither + Mythril + Foundry
-│   │   ├── critic.md                #    교차 검증 (GDB/Ghidra 재확인)
-│   │   ├── verifier.md              #    로컬 3회 + 리모트 플래그
-│   │   └── reporter.md              #    한국어 writeup 작성
-│   ├── hooks/                       # 🪝 자동 트리거
-│   │   ├── knowledge_inject.sh      #    지식 자동 주입
-│   │   └── check_agent_completion.sh #    완료 검증
+│   ├── agents/                      # 에이전트 정의 (9개, 전부 opus)
+│   │   ├── pwn.md                   # PWN: Ghidra + GDB + pwntools
+│   │   ├── rev.md                   # REV: Ghidra + GDB + Frida + z3
+│   │   ├── web.md                   # WEB: ffuf + sqlmap + dalfox
+│   │   ├── crypto.md                # CRYPTO: SageMath + z3 + hashcat
+│   │   ├── forensics.md             # FORENSICS: binwalk + volatility3
+│   │   ├── web3.md                  # WEB3: Slither + Mythril + Foundry
+│   │   ├── critic.md                # 교차 검증 (GDB/Ghidra 재확인)
+│   │   ├── verifier.md              # 로컬 3회 + 리모트 플래그
+│   │   └── reporter.md              # 한국어 writeup 작성
+│   ├── hooks/                       # 자동 트리거
+│   │   ├── knowledge_inject.sh      # 지식 자동 주입
+│   │   └── check_agent_completion.sh # 완료 검증
 │   ├── rules/
-│   │   └── ctf_pipeline.md          #    카테고리별 파이프라인 + 게이트
-│   └── settings.json                #    도구 권한 + 훅 등록
+│   │   └── ctf_pipeline.md          # 카테고리별 파이프라인 + 게이트
+│   └── settings.json                # 도구 권한 + 훅 등록
 │
 ├── tools/
-│   ├── state.py                     # 💾 SQLite fact store + checkpoint
-│   ├── knowledge.py                 # 🔍 FTS5 지식 검색 (동의어 확장)
-│   ├── quality_gate.py              # 🚦 파이프라인 품질 게이트
-│   ├── context_digest.py            # 📝 대용량 출력 압축
-│   └── gemini_query.sh              # 🤖 Gemini 요약 래퍼
+│   ├── state.py                     # SQLite fact store + checkpoint
+│   ├── knowledge.py                 # FTS5 지식 검색 (동의어 확장)
+│   ├── quality_gate.py              # 파이프라인 품질 게이트
+│   ├── context_digest.py            # 대용량 출력 압축
+│   └── gemini_query.sh              # Gemini 요약 래퍼
 │
 ├── knowledge/
 │   ├── index.md                     # 문제 인덱스
@@ -390,7 +355,7 @@ Machine/
 ### 자동 설치
 
 ```bash
-git clone https://github.com/your-repo/Machine.git
+git clone https://github.com/sane100400/Machine.git
 cd Machine
 ./setup.sh
 ```

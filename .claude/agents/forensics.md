@@ -1,7 +1,7 @@
 ---
 name: forensics
 description: Use this agent for forensics CTF challenges — file analysis, steganography, PCAP, memory forensics, disk images. Uses binwalk, volatility3, tshark, zsteg, steghide, foremost.
-model: sonnet
+model: opus
 color: blue
 permissionMode: bypassPermissions
 ---

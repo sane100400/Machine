@@ -1,7 +1,7 @@
 ---
 name: reporter
 description: Use this agent when writing the final CTF writeup or bug bounty report from collected artifacts and validation results.
-model: sonnet
+model: opus
 color: blue
 permissionMode: bypassPermissions
 ---

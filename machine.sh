@@ -190,13 +190,27 @@ fi
 case "$MODE" in
   ctf)
     if [ -z "$TARGET" ]; then
-      echo "Usage: ./machine.sh ctf /path/to/challenge[.zip]"
+      echo "Usage: ./machine.sh ctf /path/to/challenge[.zip] [category]"
+      echo "  category: pwn, rev, web, crypto, forensics, web3 (생략 시 자동 감지)"
       exit $EXIT_ERROR
     fi
 
     CHALLENGE_DIR="$(extract_if_zip "$(realpath "$TARGET")")"
+    CATEGORY="${SCOPE:-}"
     FILES=$(ls -1 "$CHALLENGE_DIR" 2>/dev/null | head -30)
     mkdir -p "$REPORT_DIR"
+
+    # Validate category if provided
+    if [ -n "$CATEGORY" ]; then
+      case "$CATEGORY" in
+        pwn|rev|web|crypto|forensics|web3) ;;
+        *)
+          echo "[!] Invalid category: $CATEGORY"
+          echo "    Valid: pwn, rev, web, crypto, forensics, web3"
+          exit $EXIT_ERROR
+          ;;
+      esac
+    fi
 
     if [ "$DRY_RUN" = true ]; then
       if [ "$JSON_OUTPUT" = true ]; then
@@ -206,29 +220,21 @@ plan = {
     'dry_run': True,
     'mode': 'ctf',
     'target': '$CHALLENGE_DIR',
+    'category': '${CATEGORY:-auto-detect}',
     'model': '$MODEL',
     'report_dir': '$REPORT_DIR',
-    'timeout': $TIMEOUT,
-    'steps': [
-        'extract_if_zip',
-        'detect_category',
-        'spawn_domain_agent',
-        'spawn_critic_agent',
-        'spawn_verifier_agent',
-        'spawn_reporter_agent',
-        'generate_summary'
-    ]
+    'timeout': $TIMEOUT
 }
 print(json.dumps(plan, indent=2))
 "
       else
         echo "[DRY-RUN] CTF mode"
         echo "  Challenge: $CHALLENGE_DIR"
+        echo "  Category:  ${CATEGORY:-auto-detect}"
         echo "  Files:     $FILES"
         echo "  Model:     $MODEL"
         echo "  Report:    $REPORT_DIR"
         echo "  Timeout:   ${TIMEOUT}s (0=none)"
-        echo "  Would run: claude -p <prompt> --permission-mode bypassPermissions --model $MODEL"
       fi
       exit $EXIT_CLEAN
     fi
@@ -237,6 +243,7 @@ print(json.dumps(plan, indent=2))
       show_banner "CTF Mode"
       echo "╔══════════════════════════════════════════════╗"
       echo "║  Challenge: $(basename "$CHALLENGE_DIR")"
+      echo "║  Category:  ${CATEGORY:-auto-detect}"
       echo "║  Files:     $FILES"
       echo "║  Model:     $MODEL"
       echo "║  Report:    $REPORT_DIR"
@@ -265,21 +272,28 @@ You are Machine Orchestrator. Use Agent Teams to solve this CTF challenge.
 Challenge directory: $CHALLENGE_DIR
 Files found: $FILES
 Report directory: $REPORT_DIR
+Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
 
 MANDATORY: Follow CLAUDE.md pipeline rules.
 
 STEP 1: Read knowledge/index.md — check if already solved
 STEP 2: Pre-check (file, strings, checksec on binaries)
-STEP 3: Determine category: pwn / rev / web / crypto / forensics / web3
-STEP 4: Spawn pipeline agents (Agent tool with subagent_type)
-
-Pipeline by category:
-  PWN:       @pwn → @critic → @verifier → @reporter
-  REV:       @rev → @critic → @verifier → @reporter
-  WEB:       @web → @critic → @verifier → @reporter
-  CRYPTO:    @crypto → @critic → @verifier → @reporter
-  FORENSICS: @forensics → @critic → @verifier → @reporter
-  WEB3:      @web3 → @critic → @verifier → @reporter
+$(if [ -n "$CATEGORY" ]; then
+echo "STEP 3: Category is $CATEGORY (user-specified). Skip detection."
+echo "STEP 4: Immediately spawn the $CATEGORY pipeline:"
+echo "  @$CATEGORY → @critic → @verifier → @reporter"
+else
+echo "STEP 3: Determine category: pwn / rev / web / crypto / forensics / web3"
+echo "STEP 4: Spawn pipeline agents (Agent tool with subagent_type)"
+echo ""
+echo "Pipeline by category:"
+echo "  PWN:       @pwn → @critic → @verifier → @reporter"
+echo "  REV:       @rev → @critic → @verifier → @reporter"
+echo "  WEB:       @web → @critic → @verifier → @reporter"
+echo "  CRYPTO:    @crypto → @critic → @verifier → @reporter"
+echo "  FORENSICS: @forensics → @critic → @verifier → @reporter"
+echo "  WEB3:      @web3 → @critic → @verifier → @reporter"
+fi)
 
 Pass each agent's output to the next via structured HANDOFF.
 Save solve.py to $CHALLENGE_DIR/solve.py
@@ -421,13 +435,27 @@ PROMPT
     # --- Main learn mode: solve challenge + produce writeup ---
     CHALLENGE_DIR="$(extract_if_zip "$(realpath "$TARGET")")"
     CHALLENGE_NAME="$(basename "$CHALLENGE_DIR")"
+    CATEGORY="${SCOPE:-}"
     FILES=$(ls -1 "$CHALLENGE_DIR" 2>/dev/null | head -30)
     WRITEUP_FILE="$CHALLENGES_DIR/${CHALLENGE_NAME}.md"
     mkdir -p "$REPORT_DIR"
 
+    # Validate category if provided
+    if [ -n "$CATEGORY" ]; then
+      case "$CATEGORY" in
+        pwn|rev|web|crypto|forensics|web3) ;;
+        *)
+          echo "[!] Invalid category: $CATEGORY"
+          echo "    Valid: pwn, rev, web, crypto, forensics, web3"
+          exit $EXIT_ERROR
+          ;;
+      esac
+    fi
+
     if [ "$DRY_RUN" = true ]; then
       echo "[DRY-RUN] Learn mode"
       echo "  Challenge: $CHALLENGE_DIR"
+      echo "  Category:  ${CATEGORY:-auto-detect}"
       echo "  Files:     $FILES"
       echo "  Model:     $MODEL"
       echo "  Writeup:   $WRITEUP_FILE"
@@ -439,6 +467,7 @@ PROMPT
       show_banner "Learn Mode"
       echo "╔══════════════════════════════════════════════╗"
       echo "║  Challenge: $(basename "$CHALLENGE_DIR")"
+      echo "║  Category:  ${CATEGORY:-auto-detect}"
       echo "║  Files:     $FILES"
       echo "║  Model:     $MODEL"
       echo "║  Writeup:   $WRITEUP_FILE"
@@ -469,6 +498,7 @@ Challenge name: $CHALLENGE_NAME
 Files found: $FILES
 Report directory: $REPORT_DIR
 Writeup output: $WRITEUP_FILE
+Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
 
 MANDATORY: Follow CLAUDE.md pipeline rules.
 
@@ -476,7 +506,11 @@ MANDATORY: Follow CLAUDE.md pipeline rules.
 
 STEP 1: Read knowledge/index.md — check if already solved
 STEP 2: Pre-check (file, strings, checksec on binaries)
-STEP 3: Determine category: pwn / rev / web / crypto / forensics / web3
+$(if [ -n "$CATEGORY" ]; then
+echo "STEP 3: Category is $CATEGORY (user-specified). Skip detection."
+else
+echo "STEP 3: Determine category: pwn / rev / web / crypto / forensics / web3"
+fi)
 STEP 4: Spawn pipeline agents:
   PWN:       @pwn → @critic → @verifier → @reporter
   REV:       @rev → @critic → @verifier → @reporter
@@ -626,8 +660,10 @@ PROMPT
   help|--help|-h)
     show_banner "Help"
     echo "Usage:"
-    echo "  ./machine.sh [flags] ctf /path/to/challenge[.zip]   Solve CTF (flag capture priority)"
-    echo "  ./machine.sh [flags] learn /path/to/challenge[.zip]  Solve + writeup + DB 저장 (학습 모드)"
+    echo "  ./machine.sh [flags] ctf <challenge> [category]      Solve CTF (flag capture priority)"
+    echo "  ./machine.sh [flags] learn <challenge> [category]    Solve + writeup + DB 저장 (학습 모드)"
+    echo ""
+    echo "Categories: pwn, rev, web, crypto, forensics, web3 (생략 시 자동 감지)"
     echo "  ./machine.sh learn --import <file|dir|url>           기존 writeup 임포트"
     echo "  ./machine.sh learn --reindex                         Knowledge DB 재인덱싱"
     echo "  ./machine.sh status                                  Check running session"
