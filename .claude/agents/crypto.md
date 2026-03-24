@@ -165,6 +165,111 @@ if s.check() == sat:
     print(''.join(chr(m[c].as_long()) for c in flag))
 ```
 
+## Attack Selection Matrix
+
+Before implementing any attack, classify the challenge and select approach:
+
+### RSA Attack Decision
+```
+IF e is small (e <= 17):
+  → e-th root attack (no padding) OR Hastad broadcast (>= e ciphertexts)
+IF n is small (< 256 bits):
+  → direct factorization: sage factor(n)
+IF n is large + multiple n values:
+  → gcd(n1, n2) — common factor
+IF e is large OR d is small:
+  → Wiener attack (cf expansion), then Boneh-Durfee (lattice)
+IF p ≈ q (close primes):
+  → Fermat factorization: sage -c "isqrt(n)"
+IF partial key known:
+  → Coppersmith small_roots
+IF encryption oracle available:
+  → LSB/Parity oracle, Bleichenbacher
+IF same message, different e:
+  → Common modulus attack (extended gcd)
+ELSE:
+  → factordb.com lookup → RsaCtfTool --attack all → lattice methods
+```
+
+### Symmetric Attack Decision
+```
+IF ECB mode:
+  → block shuffling / byte-at-a-time oracle
+IF CBC + padding oracle:
+  → Vaudenay padding oracle attack
+IF CTR/OFB + nonce reuse:
+  → keystream XOR (ct1 ^ ct2 = pt1 ^ pt2)
+IF custom cipher:
+  → z3 constraint solving → differential analysis
+IF MAC with MD5/SHA1/SHA256:
+  → length extension (hashpumpy)
+```
+
+## Failure Decision Tree
+
+### Global Counter
+```bash
+python3 $MACHINE_ROOT/tools/state.py set --key fail_count --val <N> \
+    --src /tmp/fail_log.txt --agent crypto
+```
+
+### Branch 1: RSA Progressive Deepening
+```
+TRIGGER: RSA challenge, initial attack fails
+ACTION:  Escalate in order:
+  1. RsaCtfTool --attack all (5 min timeout)
+  2. factordb.com lookup (WebFetch via r.jina.ai)
+  3. Specific attack from matrix above based on parameters
+  4. Lattice-based: LLL on Coppersmith/Boneh-Durfee (SageMath)
+  5. Multi-key analysis: collect all (n, e, c) tuples → batch gcd, related message
+  6. Search: python3 $MACHINE_ROOT/tools/knowledge.py search "RSA <specific_weakness>"
+MAX:     2 attempts per level
+NEXT:    Level 6 fails → WebSearch "CTF RSA <parameter characteristics> attack"
+STATE:   rsa_attack_level, rsa_attempts
+```
+
+### Branch 2: Custom Cipher Failure
+```
+TRIGGER: Non-standard cipher, z3 approach fails
+ACTION:  Escalate in order:
+  1. Re-read implementation — verify every operation is correctly modeled in z3
+  2. Split problem: solve partial constraints (first N bytes) to validate approach
+  3. Differential cryptanalysis: find input pairs with predictable output differences
+  4. Known-plaintext: if flag format known (e.g., "DH{"), use prefix as constraint
+  5. Brute force partial: fix known bytes, brute remaining (if space < 2^24)
+MAX:     2 attempts per approach
+NEXT:    All fail → FAIL with "cipher structure: <description>, attempted: <list>"
+STATE:   cipher_approach, cipher_attempts
+```
+
+### Branch 3: Hash Cracking Failure
+```
+TRIGGER: Hash identified but cracking fails with rockyou
+ACTION:  Escalate in order:
+  1. rockyou.txt (hashcat/john)
+  2. Rule-based: hashcat -r best64.rule
+  3. Challenge-specific wordlist: extract strings from challenge files
+  4. Mask attack: hashcat -a 3 (if format hints exist)
+  5. Check if hash is custom → reverse the hash function instead of cracking
+MAX:     1 attempt per method (cracking is binary: works or doesn't)
+NEXT:    All fail → re-examine if this is really a cracking challenge vs reversible hash
+STATE:   hash_method, hash_type
+```
+
+### Branch 4: Math/Algebra Failure
+```
+TRIGGER: SageMath computation fails or gives wrong result
+ACTION:  Debug in order:
+  1. Verify all constants from challenge file (re-read, re-parse)
+  2. Check field/ring: GF(p) vs ZZ vs QQ — wrong ring = wrong answer
+  3. Numerical precision: use exact arithmetic (Sage) not floating point
+  4. Modular inverse existence: gcd(a, n) must be 1
+  5. Try alternative formulation of same math
+MAX:     3 debugging rounds
+NEXT:    Math confirmed correct but still fails → re-examine challenge for misunderstanding
+STATE:   math_debug_round
+```
+
 ## 리서치
 
 ```bash

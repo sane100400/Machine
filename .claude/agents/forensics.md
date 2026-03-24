@@ -160,6 +160,95 @@ olevba ./doc.docm     # Office 매크로
 oleid ./doc.docm
 ```
 
+## Failure Decision Tree
+
+### Layer Depth Guard (MANDATORY)
+```
+MAX_DEPTH = 5  # Maximum extraction layers
+
+Before each extraction:
+  python3 $MACHINE_ROOT/tools/state.py set --key layer_depth --val <N> \
+      --src /tmp/extract_log.txt --agent forensics
+
+  IF layer_depth > 5:
+    STOP extraction. Report: "Reached max depth 5. Layers: <list each layer type>"
+
+  IF same file type appears 3+ times in chain:
+    STOP. Report: "Recursive pattern detected: <type> appeared <N> times"
+```
+
+### Branch 1: File Type Unknown
+```
+TRIGGER: `file` returns "data" or unrecognized type
+ACTION:  Identify in order:
+  1. xxd | head -30 → check magic bytes manually against known signatures
+  2. binwalk -B → check for embedded signatures
+  3. Check file size anomalies: compare to expected sizes for suspected types
+  4. Try common renames: add .zip/.gz/.png/.pdf extension and open
+  5. Entropy check: high entropy (>7.5) = encrypted/compressed, low (<4.0) = text/sparse
+MAX:     All 5 checks in one pass
+NEXT:    Still unknown → foremost (carving) → photorec → FAIL if nothing extracted
+STATE:   file_type_attempts, detected_type
+```
+
+### Branch 2: Steganography Dead End
+```
+TRIGGER: Image/audio file, no stego tool finds hidden data
+ACTION:  Try stego tools in order:
+  1. zsteg -a (PNG) / steghide -p "" (JPEG) / stegsolve (visual)
+  2. LSB manual extraction (all channel combinations: R,G,B,A,RGB,BGR)
+  3. steghide with password candidates: file name, challenge name, metadata strings
+  4. Palette-based hiding (GIF/PNG), IDAT chunk manipulation
+  5. Check file for appended data: compare file size vs expected (IHDR dimensions)
+  6. Audio: spectrogram (sox), DTMF decode, audio LSB
+
+  If ALL stego tools fail:
+  → Step back: may NOT be a stego challenge. Re-examine metadata, strings, file structure.
+  → Check for: zip in file trailer, ADS (NTFS), alternate data interpretation
+MAX:     1 pass through all tools, then 1 re-examination pass
+NEXT:    FAIL with "stego tools exhausted, possible non-stego challenge"
+STATE:   stego_tools_tried, stego_attempts
+```
+
+### Branch 3: Memory Forensics Failure
+```
+TRIGGER: Volatility3 profile fails or produces no results
+ACTION:  Fix in order:
+  1. Wrong profile: vol3 -f dump windows.info → verify OS version → correct profile
+  2. Try both windows.* and linux.* plugins (misidentified OS)
+  3. strings + grep for direct flag search (bypass volatility entirely)
+  4. Manual: extract process memory with dd, then binwalk/strings
+  5. Check if memory dump is partial/corrupted: file size vs expected for OS
+MAX:     2 attempts with volatility, then 1 manual pass
+NEXT:    FAIL with "memory dump unusable: <reason>"
+STATE:   vol_profile, vol_attempts
+```
+
+### Branch 4: PCAP Analysis Dead End
+```
+TRIGGER: PCAP file, no obvious flag in traffic
+ACTION:  Deepen analysis:
+  1. Protocol hierarchy: tshark -qz io,phs → focus on unusual protocols
+  2. Export all objects: HTTP, FTP, SMB, TFTP
+  3. DNS exfiltration: check query names for encoded data (base64, hex)
+  4. TCP stream reassembly: follow each stream manually
+  5. Check for TLS: is there a keylog file in challenge files?
+  6. Timing analysis: unusual packet intervals → covert channel
+MAX:     1 pass through all checks
+NEXT:    FAIL with "no data extraction from PCAP, protocols found: <list>"
+STATE:   pcap_protocols, pcap_analysis_depth
+```
+
+### Extraction Loop Guard
+```
+After EVERY extraction step:
+  1. Record: layer_type, layer_depth, extracted_file_count
+  2. extracted_file_count == 0 → stop going deeper
+  3. extracted_file_count > 100 → suspicious (zip bomb?) → check total size < 100MB
+  4. Run `file` + `strings | grep -iE 'flag|ctf|DH\{' ` on EVERY extracted file before going deeper
+  5. Flag found at ANY layer → STOP extraction, report immediately
+```
+
 ## 리서치
 
 ```bash

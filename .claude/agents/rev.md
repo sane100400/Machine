@@ -153,6 +153,85 @@ if sm.found:
 python3 $MACHINE_ROOT/tools/knowledge.py search "GDB oracle custom VM"
 ```
 
+## Failure Decision Tree
+
+### Global Failure Counter
+```bash
+python3 $MACHINE_ROOT/tools/state.py set --key fail_count --val <N> \
+    --src /tmp/fail_log.txt --agent rev
+# fail_count >= 3 same approach → pivot
+# fail_count >= 5 total → search writeups
+```
+
+### Branch 1: Solver Fallback Chain
+```
+TRIGGER: Algorithm identified but inverse computation fails
+ACTION:  Try solvers in strict order:
+  1. z3 (SMT) — encode all constraints, check() == sat
+     TRIGGER for next: z3 returns UNSAT or timeout (>60s)
+  2. angr (symbolic execution) — explore(find=CORRECT_ADDR, avoid=WRONG_ADDR)
+     TRIGGER for next: angr path explosion (>5min) or no found state
+  3. GDB oracle — use binary as black-box, byte-by-byte or known-plaintext
+     python3 $MACHINE_ROOT/tools/knowledge.py search "GDB oracle custom VM"
+     TRIGGER for next: oracle approach infeasible (no observable side channel)
+  4. Manual math inverse — pen-and-paper in SageMath
+     TRIGGER for next: non-invertible function detected
+  5. Brute force — ONLY if keyspace < 2^24
+MAX:     2 attempts per solver (re-check constraints between attempts)
+NEXT:    All 5 exhausted → FAIL with "algorithm not invertible with available tools"
+STATE:   solver_method, solver_attempts
+```
+
+### Branch 2: Anti-Debug/Packing Recovery
+```
+TRIGGER: Binary detected as packed or anti-debug triggers
+ACTION:  Unpack in order:
+  1. UPX: upx -d ./binary -o ./unpacked
+  2. Known packer signatures: check strings for packer ID → use specific unpacker
+  3. Generic OEP trace: GDB hardware breakpoint on entry after unpacking stub
+  4. Frida runtime dump: attach after unpacking, dump .text section
+  5. Manual: trace execution until original code, dump memory region
+
+  After unpacking, if Ghidra still shows garbage:
+  → Re-run with unpacked binary
+  → Check if binary is .NET/Java/Go (use appropriate decompiler)
+MAX:     2 attempts per method
+NEXT:    Cannot unpack after all methods → FAIL with "packing method unidentified"
+STATE:   unpack_method, unpack_attempts
+```
+
+### Branch 3: Custom VM Handling
+```
+TRIGGER: Binary contains dispatch loop / opcode table (custom VM)
+ACTION:  Structured approach:
+  1. Map opcodes: Ghidra switch/case → create opcode_map.md
+  2. Trace execution: GDB breakpoint on dispatch → log opcode sequence
+  3. Decompile VM program: opcode sequence → pseudocode
+  4. Identify algorithm: pattern match (XOR, TEA, AES-like, matrix, etc.)
+  5. Invert or z3-solve the decompiled program
+
+  If step 4 fails (unknown algorithm):
+  → GDB oracle on the VM (use binary as black box)
+  → If side-channel exists (timing, output length) → exploit it
+MAX:     1 attempt at full VM recovery, then pivot to oracle
+NEXT:    VM too complex → brute force if input space small, else FAIL
+STATE:   vm_opcodes_mapped, vm_algorithm
+```
+
+### Branch 4: Constraint Debugging (z3 UNSAT)
+```
+TRIGGER: z3 returns UNSAT unexpectedly
+ACTION:  Debug constraints in order:
+  1. Remove constraints one-by-one → find conflicting pair
+  2. Verify expected output bytes in GDB (may have read wrong data)
+  3. Check signedness: BitVec operations signed vs unsigned
+  4. Check modular arithmetic: missing modulo in constraint
+  5. Simplify: test with known input/output pair first
+MAX:     3 constraint debugging rounds
+NEXT:    Constraints confirmed correct + still UNSAT → algorithm understanding is wrong → re-analyze in Ghidra
+STATE:   z3_debug_round, conflicting_constraint
+```
+
 ## 리서치
 
 ```bash

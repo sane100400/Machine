@@ -113,6 +113,75 @@ import pickle, os, base64
 print(base64.b64encode(pickle.dumps(os.system('cat /flag'))))
 ```
 
+## Vulnerability Prioritization
+
+### Framework-Specific Guidance
+```
+Python/Flask:  SSTI (Jinja2) > Pickle deserialization > SQLi > SSRF > Path traversal
+Python/Django: ORM injection > SSTI (rare) > SSRF > auth bypass
+Node/Express:  Prototype pollution > SSRF > NoSQLi > SSTI (Pug/EJS) > path traversal
+PHP:           LFI/RFI > SQLi > deserialization > type juggling > XXE
+Java/Spring:   SpEL injection > XXE > deserialization > SSRF > SQLi
+Go:            SSRF > template injection > path traversal > race condition
+Ruby/Rails:    Deserialization > SSTI (ERB) > SQLi > mass assignment
+```
+
+### Confidence Scoring (record in state.py)
+```
+HIGH   (0.8-1.0): Vulnerable code line found + no sanitization + direct flag path
+MEDIUM (0.5-0.7): Suspicious pattern found + partial sanitization or indirect path
+LOW    (0.2-0.4): Potential weakness + strong sanitization or complex chain required
+
+Record: python3 $MACHINE_ROOT/tools/state.py set --key vuln_confidence --val "0.9" \
+    --src web_analysis.md --agent web
+```
+
+## Failure Decision Tree
+
+### Branch 1: No Vulnerability Found
+```
+TRIGGER: Full code review complete, no clear vulnerability identified
+ACTION:  Systematic recheck in order:
+  1. Re-examine dependencies: package.json/requirements.txt for CVEs
+     python3 $MACHINE_ROOT/tools/knowledge.py search-exploits "<library> <version>"
+  2. Check configuration: debug mode, default credentials, exposed admin routes
+  3. Logic bugs: race conditions, TOCTOU, business logic bypass (not just injection)
+  4. Multi-step chains: SSRF→LFI, SQLi→file read, auth bypass→admin→RCE
+  5. Client-side: DOM XSS, postMessage, service worker, WebSocket
+MAX:     1 pass per recheck category
+NEXT:    All rechecks negative → report with confidence=LOW + best guess vulnerability
+STATE:   recheck_category, vuln_candidates
+```
+
+### Branch 2: Multiple Vulnerabilities Found
+```
+TRIGGER: More than one vulnerability identified
+ACTION:  Prioritize by:
+  1. Direct flag access (e.g., LFI to /flag) — HIGHEST priority
+  2. RCE (SSTI, deserialization, command injection) — HIGH
+  3. File read (XXE, SSRF to file://) — MEDIUM-HIGH
+  4. Data leak (SQLi, IDOR) — MEDIUM
+  5. Client-side (XSS → admin bot) — requires bot presence
+
+  Record ALL vulnerabilities in web_analysis.md, but write solve.py for #1 priority.
+  Include BACKUP vulnerability and alternative solve.py sketch for web-docker to fall back to.
+MAX:     N/A (prioritization, not retry)
+STATE:   vuln_primary, vuln_backup
+```
+
+### Branch 3: Ambiguous Vulnerability
+```
+TRIGGER: Code looks suspicious but exploit path unclear
+ACTION:  Deepen analysis:
+  1. Trace data flow: user input → sanitization → sink (complete path)
+  2. Check if sanitization is bypassable (encoding tricks, type confusion)
+  3. Search: python3 $MACHINE_ROOT/tools/knowledge.py search "<framework> <pattern> bypass"
+  4. Check CTF meta: is this a known CTF pattern? WebSearch "<framework> CTF challenge <year>"
+MAX:     2 analysis rounds
+NEXT:    Still ambiguous → report with confidence=MEDIUM + both possible interpretations
+STATE:   analysis_round, ambiguity_reason
+```
+
 ## State Store 프로토콜
 
 ```bash
