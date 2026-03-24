@@ -484,14 +484,14 @@ while true; do
 
   # Priority 2: remote_output.txt (verifier's remote execution output)
   if [ -z "\$FLAGS" ] && [ -f "\$CHALLENGE_DIR/remote_output.txt" ]; then
-    REMOTE_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/remote_output.txt" 2>/dev/null | grep -vE '\{(\.\.\.|flag|FLAG|xxx|test|PLACEHOLDER)\}' | sort -u || true)
+    REMOTE_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/remote_output.txt" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
     if [ -n "\$REMOTE_FLAGS" ]; then
       FLAGS="\$REMOTE_FLAGS"
       FLAG_SOURCE="remote_output"
     fi
   fi
 
-  # Priority 3: session.log — ONLY if checkpoint shows verifier completed
+  # Priority 3: session.log — if checkpoint shows pipeline completed
   if [ -z "\$FLAGS" ]; then
     CHECKPOINT_OK=false
     if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
@@ -503,11 +503,20 @@ while true; do
     fi
 
     if [ "\$CHECKPOINT_OK" = true ]; then
-      SESSION_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|flag|FLAG|xxx|test|PLACEHOLDER)\}' | sort -u || true)
+      SESSION_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
       if [ -n "\$SESSION_FLAGS" ]; then
         FLAGS="\$SESSION_FLAGS"
         FLAG_SOURCE="session_log_verified"
       fi
+    fi
+  fi
+
+  # Priority 4: session.log fallback — no checkpoint required
+  if [ -z "\$FLAGS" ]; then
+    FALLBACK_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
+    if [ -n "\$FALLBACK_FLAGS" ]; then
+      FLAGS="\$FALLBACK_FLAGS"
+      FLAG_SOURCE="session_log_fallback"
     fi
   fi
 
@@ -931,14 +940,14 @@ while true; do
 
   # Priority 2: remote_output.txt (verifier's remote execution output)
   if [ -z "\$FLAGS" ] && [ -f "\$CHALLENGE_DIR/remote_output.txt" ]; then
-    REMOTE_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/remote_output.txt" 2>/dev/null | grep -vE '\{(\.\.\.|flag|FLAG|xxx|test|PLACEHOLDER)\}' | sort -u || true)
+    REMOTE_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/remote_output.txt" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
     if [ -n "\$REMOTE_FLAGS" ]; then
       FLAGS="\$REMOTE_FLAGS"
       FLAG_SOURCE="remote_output"
     fi
   fi
 
-  # Priority 3: session.log — ONLY if checkpoint shows verifier completed
+  # Priority 3: session.log — if checkpoint shows pipeline completed
   if [ -z "\$FLAGS" ]; then
     CHECKPOINT_OK=false
     if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
@@ -950,11 +959,20 @@ while true; do
     fi
 
     if [ "\$CHECKPOINT_OK" = true ]; then
-      SESSION_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|flag|FLAG|xxx|test|PLACEHOLDER)\}' | sort -u || true)
+      SESSION_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
       if [ -n "\$SESSION_FLAGS" ]; then
         FLAGS="\$SESSION_FLAGS"
         FLAG_SOURCE="session_log_verified"
       fi
+    fi
+  fi
+
+  # Priority 4: session.log fallback — no checkpoint required
+  if [ -z "\$FLAGS" ]; then
+    FALLBACK_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
+    if [ -n "\$FALLBACK_FLAGS" ]; then
+      FLAGS="\$FALLBACK_FLAGS"
+      FLAG_SOURCE="session_log_fallback"
     fi
   fi
 
