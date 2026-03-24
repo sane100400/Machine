@@ -143,6 +143,18 @@ def get_conn() -> sqlite3.Connection:
             source_path, heading, body,
             tokenize = "unicode61 remove_diacritics 1"
         );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS cisa_kev USING fts5(
+            cve_id, vendor, product, vulnerability_name, description,
+            date_added, due_date, known_ransomware,
+            tokenize = "unicode61 remove_diacritics 1"
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS cve_db USING fts5(
+            cve_id, state, date_published, description,
+            affected_products, cvss_score, cwe_ids,
+            tokenize = "unicode61 remove_diacritics 1"
+        );
     """)
     conn.commit()
     return conn
@@ -469,33 +481,36 @@ def _index_poc_github(conn: sqlite3.Connection) -> int:
     return count
 
 
-def _index_external_techniques(conn: sqlite3.Connection) -> int:
-    """Index PayloadsAllTheThings markdown files into external_techniques."""
-    pat_dir = HOME / "PayloadsAllTheThings"
-    if not pat_dir.is_dir():
-        print(f"[index-external] WARNING: PayloadsAllTheThings not found at {pat_dir}, skipping")
+def _index_md_repo(conn: sqlite3.Connection, repo_dir: Path, repo_name: str,
+                   table: str = "external_techniques", skip_readmes: bool = True) -> int:
+    """Index markdown files from a repo directory into an FTS5 table.
+    source_path is prefixed with repo_name for identification."""
+    if not repo_dir.is_dir():
+        print(f"[index-external] WARNING: {repo_name} not found at {repo_dir}, skipping")
         return 0
 
-    conn.execute("DELETE FROM external_techniques")
     count = 0
     batch = []
 
-    for md_path in sorted(pat_dir.glob("**/*.md")):
-        # Skip root README
+    for md_path in sorted(repo_dir.glob("**/*.md")):
         try:
-            rel = md_path.relative_to(pat_dir)
+            rel = md_path.relative_to(repo_dir)
         except ValueError:
             continue
-        if str(rel) == "README.md":
+        # Skip root-level READMEs and common non-content files
+        rel_str = str(rel)
+        if skip_readmes and rel_str in ("README.md", "CONTRIBUTING.md", "DISCLAIMER.md", "LICENSE.md"):
             continue
 
-        chunks = parse_chunks(md_path, base_root=pat_dir)
+        chunks = parse_chunks(md_path, base_root=repo_dir)
         for c in chunks:
-            batch.append((c["source_path"], c["heading"], c["body"]))
+            # Prefix source_path with repo name for identification
+            prefixed_path = f"[{repo_name}] {c['source_path']}"
+            batch.append((prefixed_path, c["heading"], c["body"]))
 
             if len(batch) >= BATCH_SIZE:
                 conn.executemany(
-                    "INSERT INTO external_techniques (source_path, heading, body) VALUES (?,?,?)",
+                    f"INSERT INTO {table} (source_path, heading, body) VALUES (?,?,?)",
                     batch,
                 )
                 count += len(batch)
@@ -503,13 +518,217 @@ def _index_external_techniques(conn: sqlite3.Connection) -> int:
 
     if batch:
         conn.executemany(
-            "INSERT INTO external_techniques (source_path, heading, body) VALUES (?,?,?)",
+            f"INSERT INTO {table} (source_path, heading, body) VALUES (?,?,?)",
             batch,
         )
         count += len(batch)
 
     conn.commit()
-    print(f"  external_techniques: {count} entries indexed (PayloadsAllTheThings)")
+    print(f"  {repo_name}: {count} entries indexed")
+    return count
+
+
+# All external MD repos to index
+EXTERNAL_MD_REPOS = [
+    ("PayloadsAllTheThings", HOME / "PayloadsAllTheThings"),
+    ("HackTricks",          HOME / "HackTricks"),
+    ("ctf-wiki",            HOME / "ctf-wiki"),
+    ("pwn-notes",           HOME / "pwn-notes"),
+    ("p4-ctf",              HOME / "p4-ctf"),
+]
+
+
+def _index_external_techniques(conn: sqlite3.Connection) -> int:
+    """Index all external MD repos into external_techniques table."""
+    conn.execute("DELETE FROM external_techniques")
+    total = 0
+    for repo_name, repo_dir in EXTERNAL_MD_REPOS:
+        total += _index_md_repo(conn, repo_dir, repo_name)
+    print(f"  external_techniques total: {total} entries")
+    return total
+
+
+def _index_cisa_kev(conn: sqlite3.Connection) -> int:
+    """Index CISA Known Exploited Vulnerabilities catalog."""
+    kev_path = HOME / "cve-data" / "kev.json"
+    if not kev_path.exists():
+        print(f"[index-external] WARNING: CISA KEV not found at {kev_path}, skipping")
+        return 0
+
+    conn.execute("DELETE FROM cisa_kev")
+    count = 0
+    batch = []
+
+    with open(kev_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    for entry in data.get("vulnerabilities", []):
+        cve_id = entry.get("cveID", "")
+        vendor = entry.get("vendorProject", "")
+        product = entry.get("product", "")
+        vuln_name = entry.get("vulnerabilityName", "")
+        description = entry.get("shortDescription", "")
+        date_added = entry.get("dateAdded", "")
+        due_date = entry.get("dueDate", "")
+        ransomware = entry.get("knownRansomwareCampaignUse", "")
+
+        if not cve_id:
+            continue
+
+        batch.append((cve_id, vendor, product, vuln_name, description,
+                       date_added, due_date, ransomware))
+
+        if len(batch) >= BATCH_SIZE:
+            conn.executemany(
+                "INSERT INTO cisa_kev (cve_id, vendor, product, vulnerability_name, "
+                "description, date_added, due_date, known_ransomware) VALUES (?,?,?,?,?,?,?,?)",
+                batch,
+            )
+            count += len(batch)
+            batch = []
+
+    if batch:
+        conn.executemany(
+            "INSERT INTO cisa_kev (cve_id, vendor, product, vulnerability_name, "
+            "description, date_added, due_date, known_ransomware) VALUES (?,?,?,?,?,?,?,?)",
+            batch,
+        )
+        count += len(batch)
+
+    conn.commit()
+    print(f"  cisa_kev: {count} entries indexed")
+    return count
+
+
+def _parse_cve_json(data: dict) -> dict | None:
+    """Parse a single CVE record from cvelistV5 JSON format."""
+    cve_meta = data.get("cveMetadata", {})
+    cve_id = cve_meta.get("cveId", "")
+    state = cve_meta.get("state", "")
+    date_published = cve_meta.get("datePublished", "")
+
+    if not cve_id:
+        return None
+
+    # Extract description (English preferred)
+    containers = data.get("containers", {})
+    cna = containers.get("cna", {})
+    descriptions = cna.get("descriptions", [])
+    description = ""
+    for desc in descriptions:
+        if desc.get("lang", "").startswith("en"):
+            description = desc.get("value", "")
+            break
+    if not description and descriptions:
+        description = descriptions[0].get("value", "")
+
+    # Extract affected products
+    affected = cna.get("affected", [])
+    affected_parts = []
+    for a in affected[:5]:  # Limit to avoid huge strings
+        vendor = a.get("vendor", "")
+        product = a.get("product", "")
+        versions = a.get("versions", [])
+        ver_str = ""
+        if versions:
+            v0 = versions[0]
+            ver_str = v0.get("version", "")
+            less_than = v0.get("lessThan", "")
+            if less_than:
+                ver_str = f"{ver_str} - {less_than}"
+        if vendor and product:
+            affected_parts.append(f"{vendor}/{product} {ver_str}".strip())
+    affected_str = "; ".join(affected_parts)
+
+    # Extract CVSS score
+    metrics = cna.get("metrics", [])
+    cvss_score = ""
+    for m in metrics:
+        for key in ("cvssV3_1", "cvssV3_0", "cvssV4_0", "cvssV2_0"):
+            if key in m:
+                score = m[key].get("baseScore", "")
+                severity = m[key].get("baseSeverity", "")
+                if score:
+                    cvss_score = f"{score} ({severity})" if severity else str(score)
+                    break
+        if cvss_score:
+            break
+
+    # Extract CWE IDs
+    problem_types = cna.get("problemTypes", [])
+    cwe_ids = []
+    for pt in problem_types:
+        for desc in pt.get("descriptions", []):
+            cwe_id = desc.get("cweId", "")
+            if cwe_id:
+                cwe_ids.append(cwe_id)
+    cwe_str = ", ".join(cwe_ids)
+
+    return {
+        "cve_id": cve_id,
+        "state": state,
+        "date_published": date_published[:10] if date_published else "",
+        "description": description[:2000],  # Cap description length
+        "affected_products": affected_str,
+        "cvss_score": cvss_score,
+        "cwe_ids": cwe_str,
+    }
+
+
+def _index_cve_db(conn: sqlite3.Connection) -> int:
+    """Index cvelistV5 JSON files into cve_db table."""
+    cve_dir = HOME / "cvelistV5" / "cves"
+    if not cve_dir.is_dir():
+        print(f"[index-external] WARNING: cvelistV5 not found at {cve_dir}, skipping")
+        return 0
+
+    conn.execute("DELETE FROM cve_db")
+    count = 0
+    batch = []
+    errors = 0
+
+    for json_path in sorted(cve_dir.glob("**/*.json")):
+        try:
+            text = json_path.read_text(encoding="utf-8", errors="replace")
+            data = json.loads(text)
+        except (OSError, json.JSONDecodeError):
+            errors += 1
+            continue
+
+        if isinstance(data, list):
+            continue  # skip non-standard files
+        parsed = _parse_cve_json(data)
+        if not parsed:
+            continue
+
+        batch.append((
+            parsed["cve_id"], parsed["state"], parsed["date_published"],
+            parsed["description"], parsed["affected_products"],
+            parsed["cvss_score"], parsed["cwe_ids"],
+        ))
+
+        if len(batch) >= BATCH_SIZE:
+            conn.executemany(
+                "INSERT INTO cve_db (cve_id, state, date_published, description, "
+                "affected_products, cvss_score, cwe_ids) VALUES (?,?,?,?,?,?,?)",
+                batch,
+            )
+            count += len(batch)
+            batch = []
+
+    if batch:
+        conn.executemany(
+            "INSERT INTO cve_db (cve_id, state, date_published, description, "
+            "affected_products, cvss_score, cwe_ids) VALUES (?,?,?,?,?,?,?)",
+            batch,
+        )
+        count += len(batch)
+
+    conn.commit()
+    if errors:
+        print(f"  cve_db: {count} entries indexed ({errors} parse errors skipped)")
+    else:
+        print(f"  cve_db: {count} entries indexed")
     return count
 
 
@@ -528,6 +747,8 @@ def cmd_index_external(args):
     total += _index_nuclei(conn)
     total += _index_poc_github(conn)
     total += _index_external_techniques(conn)
+    total += _index_cisa_kev(conn)
+    total += _index_cve_db(conn)
 
     print(f"\n[index-external] Total: {total} entries indexed")
     print(f"  DB: {KB_PATH}")
@@ -648,6 +869,29 @@ def _format_result(idx: int, result: dict) -> str:
     elif table == "external_techniques":
         header = f"[external] {result.get('source_path', '')} § {result.get('heading', '')}"
         snippet = result.get("body", "")[:400]
+    elif table == "cisa_kev":
+        cve = result.get("cve_id", "")
+        vendor = result.get("vendor", "")
+        product = result.get("product", "")
+        header = f"[KEV] {cve} — {vendor} {product}"
+        snippet = result.get("vulnerability_name", "")
+        desc = result.get("description", "")
+        if desc:
+            snippet += f"\n{desc[:350]}"
+        ransomware = result.get("known_ransomware", "")
+        if ransomware and ransomware.lower() != "unknown":
+            snippet += f"\nRansomware: {ransomware}"
+    elif table == "cve_db":
+        cve = result.get("cve_id", "")
+        cvss = result.get("cvss_score", "")
+        cwe = result.get("cwe_ids", "")
+        header = f"[CVE] {cve} (CVSS: {cvss})" if cvss else f"[CVE] {cve}"
+        snippet = result.get("description", "")[:400]
+        affected = result.get("affected_products", "")
+        if affected:
+            snippet += f"\nAffected: {affected}"
+        if cwe:
+            snippet += f"\nCWE: {cwe}"
     else:
         header = f"[{table}] result"
         snippet = str(result)[:400]
@@ -669,29 +913,23 @@ def cmd_search_all(args):
     all_results = []
 
     # Search each table
-    # chunks
-    all_results.extend(_search_table(conn, "chunks", fts_query, top * 2))
-    # exploitdb
-    all_results.extend(_search_table(conn, "exploitdb", fts_query, top * 2))
-    # nuclei
-    all_results.extend(_search_table(conn, "nuclei", fts_query, top * 2))
-    # poc_github
-    all_results.extend(_search_table(conn, "poc_github", fts_query, top * 2))
-    # external_techniques
-    all_results.extend(_search_table(conn, "external_techniques", fts_query, top * 2))
+    for tbl in ["chunks", "exploitdb", "nuclei", "poc_github",
+                "external_techniques", "cisa_kev", "cve_db"]:
+        all_results.extend(_search_table(conn, tbl, fts_query, top * 2))
 
     # CVE exact match boost: if query matches CVE pattern, do exact search too
     cve_match = re.match(r'(CVE-\d{4}-\d+)', query, re.IGNORECASE)
     if cve_match:
         cve_q = f'"{cve_match.group(1)}"'
-        for tbl in ["exploitdb", "nuclei", "poc_github"]:
+        for tbl in ["exploitdb", "nuclei", "poc_github", "cisa_kev", "cve_db"]:
             all_results.extend(_search_table(conn, tbl, cve_q, top))
 
-    # CWE exact match: search nuclei tags
+    # CWE exact match: search nuclei tags + cve_db cwe_ids
     cwe_match = re.match(r'(CWE-\d+)', query, re.IGNORECASE)
     if cwe_match:
         cwe_q = f'"{cwe_match.group(1)}"'
         all_results.extend(_search_table(conn, "nuclei", cwe_q, top))
+        all_results.extend(_search_table(conn, "cve_db", cwe_q, top))
 
     # Deduplicate (by table + key fields)
     seen = set()
@@ -708,6 +946,8 @@ def cmd_search_all(args):
             key = (tbl, r.get("cve_id", ""), r.get("github_url", ""))
         elif tbl == "external_techniques":
             key = (tbl, r.get("source_path", ""), r.get("heading", ""), r.get("body", "")[:100])
+        elif tbl in ("cisa_kev", "cve_db"):
+            key = (tbl, r.get("cve_id", ""))
         else:
             key = (tbl, str(r)[:200])
 
@@ -746,16 +986,15 @@ def cmd_search_exploits(args):
 
     all_results = []
 
-    # Search exploit tables only
-    all_results.extend(_search_table(conn, "exploitdb", fts_query, top * 2))
-    all_results.extend(_search_table(conn, "nuclei", fts_query, top * 2))
-    all_results.extend(_search_table(conn, "poc_github", fts_query, top * 2))
+    # Search exploit + CVE tables
+    for tbl in ["exploitdb", "nuclei", "poc_github", "cisa_kev", "cve_db"]:
+        all_results.extend(_search_table(conn, tbl, fts_query, top * 2))
 
     # CVE exact match boost
     cve_match = re.match(r'(CVE-\d{4}-\d+)', query, re.IGNORECASE)
     if cve_match:
         cve_q = f'"{cve_match.group(1)}"'
-        for tbl in ["exploitdb", "nuclei", "poc_github"]:
+        for tbl in ["exploitdb", "nuclei", "poc_github", "cisa_kev", "cve_db"]:
             all_results.extend(_search_table(conn, tbl, cve_q, top))
 
     # CWE exact match
@@ -763,6 +1002,7 @@ def cmd_search_exploits(args):
     if cwe_match:
         cwe_q = f'"{cwe_match.group(1)}"'
         all_results.extend(_search_table(conn, "nuclei", cwe_q, top))
+        all_results.extend(_search_table(conn, "cve_db", cwe_q, top))
 
     # Deduplicate
     seen = set()
@@ -775,6 +1015,8 @@ def cmd_search_exploits(args):
             key = (tbl, r.get("template_id", ""))
         elif tbl == "poc_github":
             key = (tbl, r.get("cve_id", ""), r.get("github_url", ""))
+        elif tbl in ("cisa_kev", "cve_db"):
+            key = (tbl, r.get("cve_id", ""))
         else:
             key = (tbl, str(r)[:200])
 
@@ -837,6 +1079,8 @@ def cmd_stats(args):
     nuclei_count = _safe_count(conn, "nuclei")
     poc_github_count = _safe_count(conn, "poc_github")
     ext_tech_count = _safe_count(conn, "external_techniques")
+    kev_count = _safe_count(conn, "cisa_kev")
+    cve_count = _safe_count(conn, "cve_db")
 
     # Count unique source_paths in external_techniques
     try:
@@ -846,7 +1090,8 @@ def cmd_stats(args):
     except Exception:
         ext_files = 0
 
-    total = chunks_count + exploitdb_count + nuclei_count + poc_github_count + ext_tech_count
+    total = (chunks_count + exploitdb_count + nuclei_count + poc_github_count
+             + ext_tech_count + kev_count + cve_count)
 
     db_size = KB_PATH.stat().st_size
     if db_size > 1024 * 1024:
@@ -860,6 +1105,8 @@ def cmd_stats(args):
     print(f"  nuclei:              {nuclei_count:>8} entries")
     print(f"  poc_github:          {poc_github_count:>8} entries")
     print(f"  external_techniques: {ext_tech_count:>8} entries ({ext_files} files)")
+    print(f"  cisa_kev:            {kev_count:>8} entries")
+    print(f"  cve_db:              {cve_count:>8} entries")
     print(f"  {'─' * 35}")
     print(f"  Total:               {total:>8} entries")
 

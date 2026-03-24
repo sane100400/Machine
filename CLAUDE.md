@@ -179,7 +179,7 @@ Status reports: 1-2 sentence result + 1 sentence next action.
 - **Web**: sqlmap, SSRFmap, commix, ffuf, dalfox, curl, Python requests, Playwright MCP
 - **Crypto**: sage, hashcat, john, openssl
 - **Forensics**: binwalk, file, exiftool, wireshark, foremost, volatility3
-- **Pipeline**: quality_gate.py, context_digest.py, knowledge.py, state.py
+- **Pipeline**: quality_gate.py, context_digest.py, knowledge.py, state.py, payload_check.py
 - **MCP**: gdb, ghidra, context7
 
 ## Knowledge Base (에이전트 언제든 검색 가능)
@@ -215,7 +215,28 @@ python3 tools/context_digest.py --file output.txt --prefer-gemini
 
 ## Flag Formats
 
-DH{...}, FLAG{...}, flag{...}, CTF{...}, GoN{...}, CYAI{...}
+Defined in `config.json` → `flag_formats` and `flag_regex`.
+Default: DH{...}, FLAG{...}, flag{...}, CTF{...}, GoN{...}, CYAI{...}
+
+To add a new flag format:
+```bash
+# Edit config.json — add to flag_formats array and update flag_regex
+python3 -c "
+import json
+c = json.load(open('config.json'))
+c['flag_formats'].append('NEWCTF{...}')
+# Update regex to include new prefix
+prefixes = [f.split('{')[0] for f in c['flag_formats']]
+c['flag_regex'] = '(' + '|'.join(prefixes) + r')\\{[^}]+\\}'
+json.dump(c, open('config.json','w'), indent=2)
+"
+```
+
+All agents read `config.json` for flag validation. Do NOT hardcode flag formats in agent files.
+
+## Writeup Language
+
+**All writeups and knowledge documents MUST be written in English.** This ensures consistent FTS5 indexing with external sources (HackTricks, ctf-wiki, etc.). No Korean in `knowledge/` files.
 
 ## Critical Rules
 

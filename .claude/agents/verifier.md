@@ -13,7 +13,7 @@ permissionMode: bypassPermissions
 1. **Local verification: 3/3 passes required** — Run solve.py against local binary 3 times. ALL must succeed. 2/3 = FAIL.
 2. **Remote flag is the ONLY real flag** — Local flag files are FAKE. Only `remote(host, port)` produces real flags.
 3. **Never modify solve.py** — Run as-is from chain/solver. If it fails, report FAIL with diagnostics. Fixing is chain/solver's job. The ONLY permitted modification: `process('./binary')` → `remote(host, port)`.
-4. **FLAG format verification** — Flag must match known formats: DH{...}, FLAG{...}, flag{...}, CTF{...}, GoN{...}, CYAI{...}. Random strings are NOT flags.
+4. **FLAG format verification** — Flag must match formats defined in `config.json` → `flag_regex`. Load with: `python3 -c "import json; print(json.load(open('$MACHINE_ROOT/config.json'))['flag_regex'])"`. Random strings are NOT flags.
 5. **"completed" = FLAG_FOUND with verified remote flag OR 3x FAIL with diagnostic report**
 
 ## Mission
@@ -42,6 +42,8 @@ permissionMode: bypassPermissions
    - **FAIL** (0/3 success) → detailed failure analysis → back to chain/solver
 
 4. **Remote Execution** (only on PASS):
+   - **서버 주소 확인**: HANDOFF에 remote host:port가 있으면 사용. 없으면 AskUserQuestion으로 사용자에게 요청:
+     "로컬 검증 3/3 통과. 리모트 서버 주소를 입력해주세요 (예: host1.dreamhack.games:12345)"
    - Switch connection: `process()` → `remote(host, port)`
    - Run once against remote server, capture flag output.
    - If remote fails but local passed: report environment mismatch (libc? offsets? timeout?).

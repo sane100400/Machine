@@ -4,12 +4,23 @@ __pycache__/
 .env
 *.local
 
-# 로컬 전용 설정 (절대경로 포함)
+# Local-only settings (contains absolute paths)
 .claude/settings.local.json
 
-# 개인 writeup (템플릿 제외)
+# Auto-memory (per-user, not shareable)
+.claude/projects/
+
+# Solve records (template only in git)
 knowledge/challenges/[!_]*.md
 knowledge/kb.db
-
-# 챌린지 작업 디렉토리
 knowledge/challenges/*/
+
+# Runtime state (session-specific)
+state.db
+.machine.log
+.machine.history
+.machine.pids/
+config.json
+
+# Extracted challenge working dirs
+challenges/

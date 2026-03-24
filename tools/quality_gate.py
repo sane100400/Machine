@@ -14,6 +14,7 @@ Created: 2026-03-22 (Machine CTF quality gate)
 import argparse
 import json
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -145,6 +146,35 @@ def artifact_check(challenge_dir: str, stage: str, json_output: bool = False) ->
         if not found:
             missing.append(f"하나 이상 필요: {', '.join(primary_artifacts)}")
         details["found_artifacts"] = found
+
+        # Auto-run payload_check on solve.py if it exists (catches JS bugs before critic)
+        solve_path = cdir / "solve.py"
+        if solve_path.exists() and solve_path.stat().st_size > 0:
+            payload_checker = Path(__file__).parent / "payload_check.py"
+            if payload_checker.exists():
+                try:
+                    result = subprocess.run(
+                        [sys.executable, str(payload_checker),
+                         "--extract", str(solve_path),
+                         "--check-syntax", "--check-sideeffects", "--json"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    pc_data = json.loads(result.stdout) if result.stdout.strip() else {}
+                    error_count = pc_data.get("error_count", 0)
+                    if error_count > 0:
+                        findings_summary = []
+                        for f in pc_data.get("findings", []):
+                            if f.get("severity") == "ERROR":
+                                findings_summary.append(f"[{f['check']}] {f['message']}")
+                        missing.append(
+                            f"payload_check FAIL: {error_count} JS error(s) in solve.py — "
+                            + "; ".join(findings_summary[:3])
+                        )
+                        details["payload_check"] = "FAIL"
+                    else:
+                        details["payload_check"] = "PASS"
+                except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+                    details["payload_check"] = "SKIP (error running checker)"
 
     elif stage == "verifier":
         primary_artifacts = ["solve.py", "forensics_report.md", "Exploit.t.sol"]

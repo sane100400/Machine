@@ -1,34 +1,34 @@
-# <챌린지 이름> (<CTF 이름> <연도>)
+# <challenge name> (<CTF name> <year>)
 
-## 분류
-<카테고리> / <세부 기법1> / <세부 기법2>
-<!-- 예: pwn / heap / tcache poisoning / glibc 2.35 -->
-<!-- 예: web / SSTI / Jinja2 / sandbox escape -->
+## Category
+<category> / <technique 1> / <technique 2>
+<!-- e.g.: pwn / heap / tcache poisoning / glibc 2.35 -->
+<!-- e.g.: web / SSTI / Jinja2 / sandbox escape -->
 
-## 환경
-- OS / 아키텍처:
-- 보호기법: <!-- Canary / PIE / NX / RELRO -->
+## Environment
+- OS / Architecture:
+- Protections: <!-- Canary / PIE / NX / RELRO -->
 - libc:
-- 언어 / 프레임워크:
+- Language / Framework:
 
-## 취약점
-<!-- 한 줄 요약: 어디서, 어떤 취약점 -->
+## Vulnerability
+<!-- One-line summary: where, what vulnerability -->
 
-## 풀이 흐름
+## Solution Flow
 1.
 2.
 3.
 
-## 핵심 커맨드 / 페이로드
+## Key Commands / Payload
 ```
 
 ```
 
-## 삽질 포인트
-<!-- 막혔던 부분, 잘못된 가정, 삽질한 시간 -->
+## Pitfalls
+<!-- Stuck points, wrong assumptions, time wasted -->
 
-## 참고
-<!-- 유사 문제, writeup 링크, CVE 등 -->
+## References
+<!-- Similar challenges, writeup links, CVEs, etc. -->
 
 ## Flag
 <!-- CTF{...} -->

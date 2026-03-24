@@ -17,18 +17,28 @@ web-docker 에이전트가 로컬에서 검증한 solve.py를 **리모트 서버
 3. **solve.py 수정은 TARGET 변경만** — LOCAL → REMOTE로만 바꾼다. exploit 로직을 수정하지 않는다.
 4. **최대 3회 시도** — 3회 실패 시 환경 차이 분석 후 FAIL 보고.
 5. **플래그 획득 즉시 기록** — state.py set --key flag로 기록.
+6. **리모트 리소스 제한** — spray/thread 수는 최대 3개, read size는 512KB 이하. 서버 OOM 방지.
+7. **JS 페이로드 재검증** — 리모트 실행 전 payload_check.py로 side-effect 재확인 (디버그 함수가 봇을 생성하면 OOM).
 
 ## 실행 절차
 
 ```
 1. HANDOFF에서 docker_test_report.md 확인 → PASS인지 확인
 2. state.db에서 local_success=true 확인
-3. solve.py의 TARGET을 REMOTE로 변경
-4. solve.py 실행 → 플래그 추출 시도
-5. 성공 시 → 플래그 기록 + PASS
-6. 실패 시 → 환경 차이 분석 (타임아웃, 경로, 포트)
+2.5. **JS 페이로드 재검증 (MANDATORY)**:
+     python3 $MACHINE_ROOT/tools/payload_check.py --extract <challenge_dir>/solve.py --check-sideeffects --check-resources --max-threads 3
+     → FAIL이면 수정 (특히 /api/report 사용, 과도한 thread 수)
+3. REMOTE 서버 주소 확인:
+   a. HANDOFF에 서버 주소가 있으면 → 그대로 사용
+   b. 서버 주소가 없으면 → AskUserQuestion으로 사용자에게 요청:
+      "로컬 검증 완료. 리모트 서버 주소를 입력해주세요 (예: http://host1.dreamhack.games:12345)"
+   c. 사용자 응답을 받은 후 진행
+4. solve.py의 TARGET을 REMOTE로 변경 (사용자 제공 주소 사용)
+5. solve.py 실행 → 플래그 추출 시도
+6. 성공 시 → 플래그 기록 + PASS
+7. 실패 시 → 환경 차이 분석 (타임아웃, 경로, 포트)
    → 조정 후 재시도 (최대 3회)
-7. 3회 실패 → FAIL 보고 (구체적 에러 내용 포함)
+8. 3회 실패 → FAIL 보고 (구체적 에러 내용 포함)
 ```
 
 ## 환경 차이 대응

@@ -2,13 +2,13 @@
 
 # ⚙️ Machine
 
-**CTF Autonomous Agent System**
+**Autonomous CTF Agent System**
 
-*Claude Code 기반 멀티 에이전트 파이프라인으로 CTF 문제를 자율적으로 분석·풀이·학습*
+*Multi-agent pipeline powered by Claude Code — analyzes, solves, and learns from CTF challenges autonomously*
 
 [![EK-Machine](https://img.shields.io/badge/🎵_EK--Machine-YouTube-red?style=for-the-badge)](https://www.youtube.com/watch?v=TFZOIueIBmU)
 &nbsp;
-![Agents](https://img.shields.io/badge/Agents-9-blue?style=for-the-badge)
+![Agents](https://img.shields.io/badge/Agents-12-blue?style=for-the-badge)
 &nbsp;
 ![Categories](https://img.shields.io/badge/Categories-6-green?style=for-the-badge)
 &nbsp;
@@ -25,6 +25,8 @@
   ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚══════╝
 ```
 
+*"Feed it a challenge, get a flag."* 🏴
+
 </div>
 
 ---
@@ -32,327 +34,292 @@
 ## 🚀 Quick Start
 
 ```bash
-# 1. 도구 설치
+# Install everything
 ./setup.sh
 
-# 2. CTF 문제 풀기 (자율 실행)
+# Solve a CTF challenge (fully autonomous)
 ./machine.sh ctf ./challenge.zip
 
-# 3. 카테고리 지정해서 풀기
+# Specify category manually
 ./machine.sh ctf ./challenge.zip pwn
 
-# 4. 학습 모드 (풀이 + writeup 자동 생성 + DB 저장)
+# Learn mode — solve + generate writeup + store in knowledge DB
 ./machine.sh learn ./challenge.zip
 
-# 5. 실시간 모니터링
+# Watch it work
 ./machine.sh logs
 ```
 
 ---
 
-## 📋 목차
+## 🧠 What Is This?
 
-- [개요](#-개요)
-- [실행 모드](#-실행-모드)
-- [에이전트 파이프라인](#-에이전트-파이프라인)
-- [핵심 도구](#-핵심-도구)
-- [Knowledge Base](#-knowledge-base)
-- [Hooks](#-hooks)
-- [디렉토리 구조](#-디렉토리-구조)
-- [설치](#-설치)
+Machine is an autonomous agent system that **analyzes and solves CTF challenges on its own**.
+
+```
+Challenge in → Category detection → Specialist agent pipeline → Solution → Verification → Report
+```
+
+It spawns specialized agents (pwn, rev, web, crypto, forensics, web3), coordinates them through a structured pipeline with quality gates, and learns from every attempt.
+
+### Design Principles
+
+| Principle | How |
+|-----------|-----|
+| **Anti-hallucination** | Every address/offset must be verified against real tool output (`--src` flag) |
+| **Programmatic quality gates** | `quality_gate.py` blocks pipeline transitions with exit codes, not rules |
+| **Auto knowledge injection** | FTS5 search injects relevant technique docs before each agent spawns |
+| **Fake idle detection** | Checkpoint-based agent completion verification |
+| **Learning loop** | Every solve generates a writeup → stored in DB → referenced in future challenges |
 
 ---
 
-## 💡 개요
+## 🤖 Agent Pipeline
 
-Machine은 CTF 문제를 **자율적으로 분석하고 풀이**하는 에이전트 시스템이다.
+### Per-Category Pipelines
 
 ```
-문제 투입 → 카테고리 감지 → 전문 에이전트 파이프라인 → 풀이 → 검증 → 리포트
+PWN        🔨  @pwn → @critic → @verifier → @reporter
+REV        🔍  @rev → @critic → @verifier → @reporter
+WEB        🌐  @web → @web-docker → @web-remote → @critic → @verifier → @reporter
+CRYPTO     🔐  @crypto → @critic → @verifier → @reporter
+FORENSICS  🔬  @forensics → @critic → @verifier → @reporter
+WEB3       ⛓️  @web3 → @critic → @verifier → @reporter
 ```
 
-### 핵심 설계 원칙
+All agents run on **Opus**.
 
-| 원칙 | 구현 |
-|------|------|
-| **할루시네이션 방지** | 모든 숫자 상수(offset, address)는 실제 툴 출력으로 검증 (`--src`) |
-| **구조적 품질 게이트** | 파이프라인 스테이지 간 `quality_gate.py`로 프로그래밍 차단 |
-| **자동 지식 주입** | 에이전트 스폰 시 관련 기법 문서 FTS5 검색 → systemMessage 주입 |
-| **Fake Idle 감지** | 에이전트 종료 시 checkpoint 기반 완료 여부 자동 검증 |
-| **학습 루프** | learn 모드로 풀이마다 writeup 자동 생성 → DB 축적 → 다음 문제에 참조 |
+### Agent Roles
+
+| Agent | Role | Key Tools |
+|-------|------|-----------|
+| `pwn` | Binary exploitation | Ghidra MCP, GDB+GEF, pwntools, ROPgadget |
+| `rev` | Reverse engineering | Ghidra MCP, GDB, Frida, z3, angr |
+| `web` | Web vuln analysis (source only) | Read, Grep, Glob (no network!) |
+| `web-docker` | Local Docker exploit verification | docker compose, curl, python3 |
+| `web-remote` | Remote flag capture | Verified solve.py against live target |
+| `crypto` | Cryptanalysis | SageMath, z3, RsaCtfTool, hashcat |
+| `forensics` | Forensics & stego | binwalk, volatility3, tshark, zsteg |
+| `web3` | Smart contracts | Slither, Mythril, Foundry |
+| `critic` | Cross-verification | Re-verifies all addresses/offsets with GDB/Ghidra |
+| `verifier` | Final verification | 3x local run → remote flag capture |
+| `reporter` | Writeup generation | Template-based documentation |
+
+### Quality Gates
+
+Pipeline stages are blocked programmatically — not by rules in markdown, but by **exit codes**:
+
+```
+worker → [quality_gate.py --stage critic]   → critic
+critic → [quality_gate.py --stage verifier] → verifier
+verifier → [quality_gate.py --stage reporter] → reporter
+```
+
+The quality gate also auto-runs `payload_check.py` on web exploits — catching JS bugs (quote collisions, accidental bot spawns, resource abuse) **before** they waste hours of debugging.
 
 ---
 
-## 🎮 실행 모드
+## 🔧 Core Tools
 
-### `ctf` — 플래그 캡처 모드
+### `state.py` — Verified Fact Store
 
-문제를 풀어서 플래그를 획득하는 것이 목표. 속도 우선.
-
-```bash
-./machine.sh ctf ./baby_bof.zip                    # 카테고리 자동 감지
-./machine.sh ctf ./baby_bof.zip pwn                # 카테고리 직접 지정 (감지 스킵)
-./machine.sh ctf ./baby_bof.zip rev
-./machine.sh ctf ./baby_bof.zip web
-./machine.sh ctf ./baby_bof.zip crypto
-./machine.sh ctf ./baby_bof.zip forensics
-./machine.sh ctf ./baby_bof.zip web3
-./machine.sh --timeout 1800 ctf ./baby_bof.zip     # 30분 타임아웃
-./machine.sh --dry-run ctf ./baby_bof.zip pwn      # 미리보기
-```
-
-### `learn` — 학습 모드
-
-문제를 풀고, **정해진 템플릿에 맞춰 한국어 writeup을 자동 생성**하여 Knowledge DB에 저장.
-다음 CTF에서 유사 문제가 나오면 에이전트가 자동으로 과거 풀이를 참조한다.
-
-```bash
-./machine.sh learn ./baby_bof.zip                  # 풀이 + writeup + DB 저장
-./machine.sh learn ./baby_bof.zip pwn              # 카테고리 지정 + 학습
-./machine.sh learn --import ./my_writeup.md         # 기존 writeup 임포트
-./machine.sh learn --import ~/writeups/             # 디렉토리 일괄 임포트
-./machine.sh learn --import https://blog.example.com/writeup  # URL에서 가져오기
-./machine.sh learn --reindex                        # Knowledge DB 재인덱싱
-```
-
-### `status` / `logs` — 모니터링
-
-```bash
-./machine.sh status    # 세션 상태 확인
-./machine.sh logs      # 실시간 로그 tail
-```
-
----
-
-## 🤖 에이전트 파이프라인
-
-### 카테고리별 파이프라인
-
-```
-PWN:       @pwn → @critic → @verifier → @reporter
-REV:       @rev → @critic → @verifier → @reporter
-WEB:       @web → @critic → @verifier → @reporter
-CRYPTO:    @crypto → @critic → @verifier → @reporter
-FORENSICS: @forensics → @critic → @verifier → @reporter
-WEB3:      @web3 → @critic → @verifier → @reporter
-```
-
-모든 에이전트는 **opus** 모델을 사용한다.
-
-### 에이전트 상세
-
-| Agent | 역할 | 주요 도구 |
-|-------|------|----------|
-| `pwn` | 바이너리 익스플로잇 | Ghidra MCP, GDB+GEF, pwntools, ROPgadget |
-| `rev` | 리버스 엔지니어링 | Ghidra MCP, GDB, Frida, z3, angr |
-| `web` | 웹 취약점 분석 | ffuf, sqlmap, dalfox, SSRFmap, Playwright |
-| `crypto` | 암호 분석 | SageMath, z3, RsaCtfTool, hashcat |
-| `forensics` | 포렌식/스테가노 | binwalk, volatility3, tshark, zsteg |
-| `web3` | 스마트 컨트랙트 | Slither, Mythril, Foundry |
-| `critic` | 교차 검증 | GDB/Ghidra로 모든 주소/오프셋 재검증 |
-| `verifier` | 최종 검증 | 로컬 3회 실행 → 리모트 플래그 획득 |
-| `reporter` | Writeup 작성 | 템플릿 기반 한국어 풀이 문서화 |
-
-### 품질 게이트
-
-파이프라인 스테이지 간 `quality_gate.py`가 프로그래밍적으로 차단:
-
-```
-worker → [artifact-check --stage critic] → critic
-                                              ↓
-critic → [artifact-check --stage verifier] → verifier
-                                                ↓
-verifier → [artifact-check --stage reporter] → reporter
-```
-
-```bash
-python3 tools/quality_gate.py ctf-verify <challenge_dir>
-python3 tools/quality_gate.py artifact-check <challenge_dir> --stage critic
-```
-
----
-
-## 🔧 핵심 도구
-
-### `state.py` — 검증된 Fact Store
-
-에이전트 간 할루시네이션을 막는 SQLite 기반 상태 관리.
-모든 사실에는 실제 툴 출력 파일 출처(`--src`)가 필요하다.
+SQLite-backed state management that prevents hallucination between agents.
+Every fact requires a source file (`--src`) pointing to real tool output.
 
 ```bash
 export CHALLENGE_DIR=/path/to/challenge
 
-# fact 기록 (--src 필수)
+# Record a fact (--src required)
 python3 tools/state.py set --key main_addr --val 0x401234 \
     --src /tmp/gdb.txt --agent pwn
 
-# 조회
+# Query
 python3 tools/state.py get --key main_addr
 python3 tools/state.py facts
 
-# handoff 전 아티팩트 검증 (실패 시 파이프라인 블로킹)
+# Verify artifacts before handoff (blocks pipeline if missing)
 python3 tools/state.py verify --artifacts solve.py reversal_map.md
 
-# checkpoint 관리
+# Checkpoint management
 python3 tools/state.py checkpoint --agent pwn --phase 2 \
     --phase-name gdb_verify --status in_progress
 ```
 
-### `knowledge.py` — FTS5 지식 검색
+### `knowledge.py` — FTS5 Knowledge Search
 
-에이전트가 분석 중 언제든 기법/취약점/익스플로잇을 검색할 수 있다.
+Agents can search techniques, vulnerabilities, and exploits at any time during analysis.
 
 ```bash
-# 기법 검색
+# Technique search
 python3 tools/knowledge.py search "tcache poisoning glibc 2.35"
 
-# 전체 테이블 통합 검색 (기법 + ExploitDB + Nuclei + PoC-in-GitHub)
+# Cross-source search (techniques + ExploitDB + Nuclei + PoC-in-GitHub)
 python3 tools/knowledge.py search-all "CVE-2024-1234"
 
-# 익스플로잇 DB 전용 검색
+# Exploit DB search
 python3 tools/knowledge.py search-exploits "apache RCE"
 
-# 외부 소스 인덱싱 (최초 1회)
+# Index external sources (one-time setup)
 python3 tools/knowledge.py index-external
 
-# 현황
+# Stats
 python3 tools/knowledge.py stats
 ```
 
-**동의어 자동 확장**: `uaf` → `use after free`, `bof` → `buffer overflow`, `sqli` → `sql injection` 등 16개 약어 자동 매핑
+**Auto synonym expansion**: `uaf` → `use after free`, `bof` → `buffer overflow`, `sqli` → `sql injection`, etc.
 
-### `quality_gate.py` — 파이프라인 게이트
+### `payload_check.py` — JS Payload Validator
 
-스테이지 간 프로그래밍적 차단. Exit 0 = PASS, Exit 1 = FAIL.
+Catches common web exploit bugs **before deployment**. Integrated into quality gates — runs automatically.
+
+```bash
+# Check a solve.py for JS payload issues
+python3 tools/payload_check.py --extract solve.py --check-all
+
+# Direct JS check
+python3 tools/payload_check.py --js "var rce='...'" --check-syntax
+
+# Self-test
+python3 tools/payload_check.py --self-test
+```
+
+Detects:
+- **Quote collisions** — `flag=''` inside `'`-delimited string (SyntaxError at runtime)
+- **Side-effect debug** — `fetch('/api/report')` accidentally spawning bot processes
+- **Resource abuse** — too many threads/workers overwhelming remote servers
+
+### `quality_gate.py` — Pipeline Gate
+
+Programmatic blocking between stages. Exit 0 = PASS, Exit 1 = FAIL.
 
 ```bash
 python3 tools/quality_gate.py ctf-verify <challenge_dir>
 python3 tools/quality_gate.py artifact-check <dir> --stage critic
-python3 tools/quality_gate.py artifact-check <dir> --stage verifier
-python3 tools/quality_gate.py artifact-check <dir> --stage reporter
 ```
 
-### `context_digest.py` — 대용량 출력 압축
+### `context_digest.py` — Output Compression
 
-500줄 이상 출력을 핵심 패턴(주소, 플래그, 에러)만 추출하여 압축.
+Extracts key patterns (addresses, flags, errors) from 500+ line outputs.
 
 ```bash
 cat large_output.txt | python3 tools/context_digest.py --max-lines 100
-python3 tools/context_digest.py --file output.txt --prefer-gemini  # Gemini 요약
 ```
 
 ---
 
 ## 📚 Knowledge Base
 
-### 구조
+### Structure
 
 ```
 knowledge/
-├── kb.db                    # FTS5 인덱스 (자동 생성)
-├── index.md                 # 풀었거나 시도한 문제 인덱스
-├── techniques/              # 기법 문서 (12개+)
-│   ├── heap_house_of_x.md   # House of Spirit/Force/Lore/...
+├── kb.db                    # FTS5 index (auto-generated)
+├── index.md                 # Challenge index (solved / attempted)
+├── techniques/              # Technique docs (12+)
+│   ├── heap_house_of_x.md
 │   ├── web_ctf_techniques.md
 │   ├── gdb_oracle_reverse.md
 │   └── ...
-└── challenges/              # 풀이 기록 (gitignore)
-    ├── _template.md          # writeup 템플릿
-    └── <challenge>.md        # learn 모드가 자동 생성
+└── challenges/              # Solve records (gitignored)
+    ├── _template.md
+    └── <challenge>.md       # Auto-generated by learn mode
 ```
 
-### 지식 축적 흐름
+### Knowledge Accumulation Flow
 
 ```
-learn 모드로 문제 풀이
+Solve challenge in learn mode
         ↓
-템플릿에 맞춰 한국어 writeup 자동 생성
+Auto-generate writeup from template
         ↓
-knowledge/challenges/<name>.md 저장
+Save to knowledge/challenges/<name>.md
         ↓
-FTS5 자동 인덱싱 (kb.db)
+FTS5 auto-indexing (kb.db)
         ↓
-다음 CTF에서 유사 문제 → 에이전트가 자동 참조
+Next CTF → agent auto-references past solves
 ```
 
-### 외부 소스 인덱싱
+### External Source Indexing
 
 ```bash
 python3 tools/knowledge.py index-external
 ```
 
-| 소스 | 경로 | 설명 |
-|------|------|------|
-| ExploitDB | `~/exploitdb/` | 공개 익스플로잇 CSV |
-| Nuclei | `~/nuclei-templates/` | 취약점 스캔 템플릿 |
-| PoC-in-GitHub | `~/PoC-in-GitHub/` | CVE별 PoC 모음 |
-| PayloadsAllTheThings | `~/PayloadsAllTheThings/` | 페이로드/기법 문서 |
+| Source | Path | Description |
+|--------|------|-------------|
+| ExploitDB | `~/exploitdb/` | Public exploit CSV database |
+| Nuclei | `~/nuclei-templates/` | Vulnerability scan templates |
+| PoC-in-GitHub | `~/PoC-in-GitHub/` | CVE-linked PoC collection |
+| PayloadsAllTheThings | `~/PayloadsAllTheThings/` | Payloads & technique docs |
 
 ---
 
 ## 🪝 Hooks
 
-| Hook | 트리거 | 역할 |
-|------|-------|------|
-| `knowledge_inject.sh` | PreToolUse (Agent) | 에이전트 스폰 직전 관련 기법 FTS 검색 → systemMessage 주입 |
-| `check_agent_completion.sh` | SubagentStop | checkpoint.json으로 Fake Idle / 할루시네이션 / 에러 자동 감지 |
+| Hook | Trigger | Purpose |
+|------|---------|---------|
+| `knowledge_inject.sh` | PreToolUse (Agent) | FTS5 search for relevant techniques → inject into agent's system message |
+| `check_agent_completion.sh` | SubagentStop | Detect fake idle / hallucination / errors via checkpoint.json |
 
 ---
 
-## 📁 디렉토리 구조
+## 📁 Directory Structure
 
 ```
 Machine/
-├── machine.sh                       # 자율 실행 런처 (ctf / learn / status / logs)
-├── CLAUDE.md                        # 오케스트레이터 규칙 + 파이프라인 정의
-├── setup.sh                         # 도구 일괄 설치 스크립트
+├── machine.sh                       # Autonomous launcher (ctf / learn / status / logs)
+├── CLAUDE.md                        # Orchestrator rules + pipeline definitions
+├── setup.sh                         # One-command tool installer
 │
 ├── .claude/
-│   ├── agents/                      # 에이전트 정의 (9개, 전부 opus)
+│   ├── agents/                      # Agent definitions (12 agents, all Opus)
 │   │   ├── pwn.md                   # PWN: Ghidra + GDB + pwntools
 │   │   ├── rev.md                   # REV: Ghidra + GDB + Frida + z3
-│   │   ├── web.md                   # WEB: ffuf + sqlmap + dalfox
+│   │   ├── web.md                   # WEB Phase 1: source analysis only
+│   │   ├── web-docker.md            # WEB Phase 2: local Docker verification
+│   │   ├── web-remote.md            # WEB Phase 3: remote flag capture
 │   │   ├── crypto.md                # CRYPTO: SageMath + z3 + hashcat
 │   │   ├── forensics.md             # FORENSICS: binwalk + volatility3
 │   │   ├── web3.md                  # WEB3: Slither + Mythril + Foundry
-│   │   ├── critic.md                # 교차 검증 (GDB/Ghidra 재확인)
-│   │   ├── verifier.md              # 로컬 3회 + 리모트 플래그
-│   │   └── reporter.md              # 한국어 writeup 작성
-│   ├── hooks/                       # 자동 트리거
-│   │   ├── knowledge_inject.sh      # 지식 자동 주입
-│   │   └── check_agent_completion.sh # 완료 검증
+│   │   ├── critic.md                # Cross-verification
+│   │   ├── verifier.md              # Local 3x + remote flag
+│   │   └── reporter.md              # Writeup generation
+│   ├── hooks/                       # Auto-triggers
+│   │   ├── knowledge_inject.sh
+│   │   └── check_agent_completion.sh
 │   ├── rules/
-│   │   └── ctf_pipeline.md          # 카테고리별 파이프라인 + 게이트
-│   └── settings.json                # 도구 권한 + 훅 등록
+│   │   └── ctf_pipeline.md          # Per-category pipeline + gates
+│   └── settings.json                # Tool permissions + hook registration
 │
 ├── tools/
 │   ├── state.py                     # SQLite fact store + checkpoint
-│   ├── knowledge.py                 # FTS5 지식 검색 (동의어 확장)
-│   ├── quality_gate.py              # 파이프라인 품질 게이트
-│   ├── context_digest.py            # 대용량 출력 압축
-│   └── gemini_query.sh              # Gemini 요약 래퍼
+│   ├── knowledge.py                 # FTS5 knowledge search (synonym expansion)
+│   ├── quality_gate.py              # Pipeline quality gate
+│   ├── payload_check.py             # JS payload validator (auto-integrated)
+│   ├── context_digest.py            # Large output compression
+│   └── gemini_query.sh              # Gemini summarization wrapper
 │
 ├── knowledge/
-│   ├── index.md                     # 문제 인덱스
-│   ├── kb.db                        # FTS5 인덱스 (gitignore)
-│   ├── techniques/                  # 기법 문서 (12개+)
-│   └── challenges/                  # 풀이 기록 (gitignore)
+│   ├── index.md                     # Challenge index
+│   ├── kb.db                        # FTS5 index (gitignored)
+│   ├── techniques/                  # Technique docs (12+)
+│   └── challenges/                  # Solve records (gitignored)
 │
-├── reports/                         # 세션 리포트 출력
-└── challenges/                      # 추출된 챌린지 파일
+├── reports/                         # Session report output
+└── challenges/                      # Extracted challenge files
 ```
 
 ---
 
-## 🛠 설치
+## 🛠 Installation
 
-### 요구사항
+### Requirements
 
-- Ubuntu 24.04 LTS (WSL2 지원)
+- Ubuntu 24.04 LTS (WSL2 supported)
 - Python 3.12+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (인증 완료 상태)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (authenticated)
 
-### 자동 설치
+### One-Command Setup
 
 ```bash
 git clone https://github.com/sane100400/Machine.git
@@ -360,10 +327,10 @@ cd Machine
 ./setup.sh
 ```
 
-설치되는 도구:
+### Installed Tools
 
-| 카테고리 | 도구 |
-|---------|------|
+| Category | Tools |
+|----------|-------|
 | **PWN/REV** | gdb, GEF, Ghidra, checksec, patchelf, pwntools, ROPgadget, one_gadget |
 | **Web** | sqlmap, ffuf, dalfox, commix |
 | **Crypto** | hashcat, john, SageMath, z3, RsaCtfTool |
@@ -375,6 +342,6 @@ cd Machine
 
 <div align="center">
 
-**Machine** — *문제를 풀고, 기록하고, 학습하는 자율 CTF 에이전트*
+**Machine** — *solve it, record it, learn from it* 🏴
 
 </div>

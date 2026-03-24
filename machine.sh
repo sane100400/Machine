@@ -3,9 +3,12 @@
 # Uses Claude Code with bypassPermissions for fully autonomous operation
 #
 # Usage:
-#   ./machine.sh [--json] [--timeout N] [--dry-run] ctf /path/to/challenge[.zip]
+#   ./machine.sh [--json] [--timeout N] [--dry-run] [--flag FORMAT] [--max-retries N] ctf /path/to/challenge[.zip]
 #   ./machine.sh status                         (check running sessions)
 #   ./machine.sh logs                           (tail latest session log)
+#   --flag FORMAT: add a flag prefix (e.g., --flag NEWCTF → matches NEWCTF{...})
+#   --max-retries N: max retry attempts (0 = unlimited, default). Retries until flag found.
+#   --mem-limit N: memory limit in GB (default: 12). OOM watchdog kills children if exceeded.
 
 set -euo pipefail
 
@@ -30,15 +33,53 @@ OLD_PID_FILE="$SCRIPT_DIR/.machine.pid"
 JSON_OUTPUT=false
 TIMEOUT=0
 DRY_RUN=false
+FLAG_FORMAT=""
+MAX_RETRIES=0  # 0 = unlimited retries (keep trying until flag found)
+MEM_LIMIT_GB=12  # Default: 12GB (leave ~4GB for OS on 16GB system)
 
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --json) JSON_OUTPUT=true; shift ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --flag) FLAG_FORMAT="$2"; shift 2 ;;
+    --max-retries) MAX_RETRIES="$2"; shift 2 ;;
+    --mem-limit) MEM_LIMIT_GB="$2"; shift 2 ;;
     *) break ;;
   esac
 done
+
+# Resolve flag format: --flag arg > config.json > default
+_resolve_flag_config() {
+  local config_file="$SCRIPT_DIR/config.json"
+  if [ -n "$FLAG_FORMAT" ]; then
+    # User specified --flag PREFIX{...} or just PREFIX
+    local prefix="${FLAG_FORMAT%%\{*}"
+    # Read existing config, add if not present, update regex
+    if [ -f "$config_file" ]; then
+      python3 -c "
+import json, sys
+c = json.load(open('$config_file'))
+prefix = '$prefix'
+fmt = prefix + '{...}'
+if fmt not in c['flag_formats']:
+    c['flag_formats'].append(fmt)
+prefixes = [f.split('{')[0] for f in c['flag_formats']]
+c['flag_regex'] = '(' + '|'.join(prefixes) + r')\\{[^}]+\\}'
+json.dump(c, open('$config_file', 'w'), indent=2)
+"
+    fi
+  fi
+  # Load from config
+  if [ -f "$config_file" ]; then
+    FLAG_REGEX="$(python3 -c "import json; print(json.load(open('$config_file'))['flag_regex'])")"
+    FLAG_DISPLAY="$(python3 -c "import json; print(', '.join(json.load(open('$config_file'))['flag_formats']))")"
+  else
+    FLAG_REGEX='(DH|FLAG|flag|CTF|GoN|CYAI)\{[^}]+\}'
+    FLAG_DISPLAY="DH{...}, FLAG{...}, flag{...}, CTF{...}, GoN{...}, CYAI{...}"
+  fi
+}
+_resolve_flag_config
 
 MODE="${1:-help}"
 TARGET="${2:-}"
@@ -302,7 +343,8 @@ echo "  CRYPTO:    @crypto → @critic → @verifier → @reporter"
 echo "  FORENSICS: @forensics → @critic → @verifier → @reporter"
 echo "  WEB3:      @web3 → @critic → @verifier → @reporter"
 fi)
-$([ -n "$SERVER" ] && echo "
+$(if [ -n "$SERVER" ]; then
+echo "
 IMPORTANT: Remote server = $SERVER
 - This is the REAL flag server. But DO NOT hit it first.
 - For WEB challenges, you MUST follow this order:
@@ -310,7 +352,17 @@ IMPORTANT: Remote server = $SERVER
   2. docker compose up -d → exploit on localhost FIRST
   3. Only after local success → run solve.py against $SERVER
 - For PWN challenges: use remote() in pwntools only after local binary test passes
-- Flags obtained from $SERVER are REAL flags")
+- Flags obtained from $SERVER are REAL flags"
+else
+echo "
+IMPORTANT: No remote server address provided yet.
+- Complete analysis and local verification WITHOUT remote server.
+- When the pipeline reaches the REMOTE stage (web-remote or verifier remote execution):
+  → Use AskUserQuestion to ask the user for the remote server address.
+  → Message: '로컬 검증 완료. 리모트 서버 주소를 입력해주세요 (예: host1.dreamhack.games:12345)'
+  → Wait for the user's response before proceeding.
+- This allows the user to start the VM fresh right before the remote stage, avoiding VM timeout issues."
+fi)
 
 Pass each agent's output to the next via structured HANDOFF.
 Save solve.py to $CHALLENGE_DIR/solve.py
@@ -318,7 +370,7 @@ Save writeup to $REPORT_DIR/writeup.md
 
 STEP 5: Collect results — Update knowledge/index.md
 
-Flag formats: DH{...}, FLAG{...}, flag{...}, CTF{...}, GoN{...}, CYAI{...}
+Flag formats: $FLAG_DISPLAY
 PROMPT_EOF
 
     # Write runner script (avoids nohup escaping issues)
@@ -333,35 +385,167 @@ PID_FILE="$PID_FILE"
 MODEL="$MODEL"
 CHALLENGE_DIR="$CHALLENGE_DIR"
 TIMEOUT_VAL=$TIMEOUT
+MAX_RETRIES_VAL=$MAX_RETRIES
+MEM_LIMIT_GB=$MEM_LIMIT_GB
 MY_TTY="$(tty 2>/dev/null || echo '')"
+
+# --- OOM Prevention ---
+MEM_LIMIT_KB=\$((MEM_LIMIT_GB * 1024 * 1024))
+ulimit -v \$MEM_LIMIT_KB 2>/dev/null || true
+echo "[*] Memory limit: \${MEM_LIMIT_GB}GB (ulimit -v \${MEM_LIMIT_KB}KB)" >> "\$REPORT_DIR/session.log"
+
+# Background memory watchdog: kill child tree if RSS exceeds limit
+_oom_watchdog() {
+  local limit_kb=\$((MEM_LIMIT_GB * 1024 * 1024))
+  while true; do
+    sleep 10
+    # Sum RSS of all children of this runner process
+    local rss_total=0
+    for pid in \$(pgrep -P \$\$ 2>/dev/null); do
+      local rss=\$(awk '/VmRSS/{print \$2}' /proc/\$pid/status 2>/dev/null || echo 0)
+      rss_total=\$((rss_total + rss))
+    done
+    if [ "\$rss_total" -gt "\$limit_kb" ] 2>/dev/null; then
+      echo "[!] OOM WATCHDOG: children RSS \${rss_total}KB > limit \${limit_kb}KB — killing child processes" >> "\$REPORT_DIR/session.log"
+      pkill -TERM -P \$\$ 2>/dev/null || true
+      sleep 2
+      pkill -KILL -P \$\$ 2>/dev/null || true
+      break
+    fi
+  done
+}
+_oom_watchdog &
+OOM_WATCHDOG_PID=\$!
 
 CLAUDE_CMD="claude -p"
 if [ "\$TIMEOUT_VAL" -gt 0 ] 2>/dev/null; then
   CLAUDE_CMD="timeout \$TIMEOUT_VAL claude -p"
 fi
 
-\$CLAUDE_CMD "\$(cat "\$PROMPT_FILE")" --permission-mode bypassPermissions --model "\$MODEL" --output-format stream-json --verbose 2>&1 | python3 -u "\$SCRIPT_DIR/tools/stream_parser.py" "\$REPORT_DIR/session.log"
-CLAUDE_EXIT=\$?
+# === Retry loop: keep trying until flag found ===
+ATTEMPT=0
+FLAGS=""
+
+while true; do
+  ATTEMPT=\$((ATTEMPT + 1))
+  echo "" >> "\$REPORT_DIR/session.log"
+  echo "═══════════════════════════════════════" >> "\$REPORT_DIR/session.log"
+  echo "=== ATTEMPT \$ATTEMPT (started \$(date)) ===" >> "\$REPORT_DIR/session.log"
+  echo "═══════════════════════════════════════" >> "\$REPORT_DIR/session.log"
+
+  # Build prompt: on retry, append previous failure context
+  if [ \$ATTEMPT -gt 1 ]; then
+    CURRENT_PROMPT="\$REPORT_DIR/prompt_attempt_\${ATTEMPT}.txt"
+    cp "\$PROMPT_FILE" "\$CURRENT_PROMPT"
+    {
+      echo ""
+      echo "═══ RETRY ATTEMPT \$ATTEMPT ═══"
+      echo "Previous \$((ATTEMPT - 1)) attempt(s) FAILED to capture the flag."
+      echo ""
+      echo "=== Previous session log (last 150 lines) ==="
+      tail -150 "\$REPORT_DIR/session.log" 2>/dev/null || true
+      echo ""
+      if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
+        echo "=== Checkpoint from previous attempt ==="
+        cat "\$CHALLENGE_DIR/checkpoint.json"
+        echo ""
+      fi
+      if [ -f "\$CHALLENGE_DIR/solve.py" ]; then
+        echo "=== Previous solve.py ==="
+        cat "\$CHALLENGE_DIR/solve.py"
+        echo ""
+      fi
+      echo "CRITICAL INSTRUCTIONS FOR RETRY:"
+      echo "1. You MUST try a FUNDAMENTALLY DIFFERENT approach than previous attempts."
+      echo "2. Analyze WHY the previous attempt failed before starting."
+      echo "3. Read any existing artifacts in \$CHALLENGE_DIR for context."
+      echo "4. Do NOT repeat the same strategy that already failed."
+      echo "5. Consider: different vulnerability class, different exploit technique, re-analyzing the binary/source."
+    } >> "\$CURRENT_PROMPT"
+  else
+    CURRENT_PROMPT="\$PROMPT_FILE"
+  fi
+
+  \$CLAUDE_CMD "\$(cat "\$CURRENT_PROMPT")" --permission-mode bypassPermissions --model "\$MODEL" --output-format stream-json --verbose 2>&1 | python3 -u "\$SCRIPT_DIR/tools/stream_parser.py" "\$REPORT_DIR/session.log"
+  CLAUDE_EXIT=\$?
+
+  # Check for flags — prioritize verified remote flags over session.log grep
+  FLAGS=""
+  FLAG_SOURCE=""
+
+  # Priority 1: flag_captured.txt (written by verifier after remote execution)
+  if [ -f "\$CHALLENGE_DIR/flag_captured.txt" ]; then
+    VERIFIED_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/flag_captured.txt" 2>/dev/null | sort -u || true)
+    if [ -n "\$VERIFIED_FLAGS" ]; then
+      FLAGS="\$VERIFIED_FLAGS"
+      FLAG_SOURCE="remote_verified"
+    fi
+  fi
+
+  # Priority 2: remote_output.txt (verifier's remote execution output)
+  if [ -z "\$FLAGS" ] && [ -f "\$CHALLENGE_DIR/remote_output.txt" ]; then
+    REMOTE_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/remote_output.txt" 2>/dev/null | grep -vE '\{(\.\.\.|flag|FLAG|xxx|test|PLACEHOLDER)\}' | sort -u || true)
+    if [ -n "\$REMOTE_FLAGS" ]; then
+      FLAGS="\$REMOTE_FLAGS"
+      FLAG_SOURCE="remote_output"
+    fi
+  fi
+
+  # Priority 3: session.log — ONLY if checkpoint shows verifier completed
+  if [ -z "\$FLAGS" ]; then
+    CHECKPOINT_OK=false
+    if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
+      CP_STATUS=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('status',''))" 2>/dev/null || echo "")
+      CP_AGENT=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('agent',''))" 2>/dev/null || echo "")
+      if [ "\$CP_STATUS" = "completed" ] && [ "\$CP_AGENT" = "verifier" ]; then
+        CHECKPOINT_OK=true
+      fi
+    fi
+
+    if [ "\$CHECKPOINT_OK" = true ]; then
+      SESSION_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|flag|FLAG|xxx|test|PLACEHOLDER)\}' | sort -u || true)
+      if [ -n "\$SESSION_FLAGS" ]; then
+        FLAGS="\$SESSION_FLAGS"
+        FLAG_SOURCE="session_log_verified"
+      fi
+    fi
+  fi
+
+  if [ -n "\$FLAGS" ]; then
+    echo "" >> "\$REPORT_DIR/session.log"
+    echo "FLAGS FOUND on attempt \$ATTEMPT (source: \$FLAG_SOURCE):" >> "\$REPORT_DIR/session.log"
+    echo "\$FLAGS" >> "\$REPORT_DIR/session.log"
+    echo "\$FLAGS" > "\$REPORT_DIR/flags.txt"
+    break
+  fi
+
+  echo "" >> "\$REPORT_DIR/session.log"
+  echo "NO FLAGS FOUND (attempt \$ATTEMPT)" >> "\$REPORT_DIR/session.log"
+
+  # Check retry limit (0 = unlimited)
+  if [ "\$MAX_RETRIES_VAL" -gt 0 ] 2>/dev/null && [ \$ATTEMPT -ge "\$MAX_RETRIES_VAL" ]; then
+    echo "MAX RETRIES (\$MAX_RETRIES_VAL) reached. Giving up." >> "\$REPORT_DIR/session.log"
+    break
+  fi
+
+  echo "=== RETRYING in 5 seconds... ===" >> "\$REPORT_DIR/session.log"
+  sleep 5
+done
 
 echo '' >> "\$REPORT_DIR/session.log"
 echo '=== SESSION COMPLETE ===' >> "\$REPORT_DIR/session.log"
 echo "Timestamp: \$(date)" >> "\$REPORT_DIR/session.log"
-
-FLAGS=\$(grep -oE '(DH|FLAG|flag|CTF|GoN|CYAI)\{[^}]+\}' "\$REPORT_DIR/session.log" 2>/dev/null | sort -u || true)
-if [ -n "\$FLAGS" ]; then
-  echo "FLAGS FOUND:" >> "\$REPORT_DIR/session.log"
-  echo "\$FLAGS" >> "\$REPORT_DIR/session.log"
-  echo "\$FLAGS" > "\$REPORT_DIR/flags.txt"
-else
-  echo 'NO FLAGS FOUND' >> "\$REPORT_DIR/session.log"
-fi
+echo "Total attempts: \$ATTEMPT" >> "\$REPORT_DIR/session.log"
 
 FINAL_EXIT=\$(bash "\$SCRIPT_DIR/machine.sh" _exit_code "\$REPORT_DIR" 2>/dev/null || echo 0)
 echo "\$FINAL_EXIT" > "\$REPORT_DIR/exit_code"
 
+# Determine session status
 SESSION_STATUS='completed'
-[ "\$CLAUDE_EXIT" -eq 124 ] 2>/dev/null && SESSION_STATUS='timeout'
-[ "\$CLAUDE_EXIT" -ne 0 ] 2>/dev/null && SESSION_STATUS='failed'
+if [ -z "\$FLAGS" ]; then
+  SESSION_STATUS='incomplete'
+fi
+
 bash "\$SCRIPT_DIR/machine.sh" _summary "\$REPORT_DIR" ctf "\$CHALLENGE_DIR" "\$START_TS" "\$FINAL_EXIT" "\$SESSION_STATUS" 2>/dev/null || true
 
 # === Terminal notification ===
@@ -373,10 +557,15 @@ SECS=\$(( ELAPSED % 60 ))
 NOTIFY_FILE="\$REPORT_DIR/result.txt"
 echo "" > "\$NOTIFY_FILE"
 echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
-echo "  MACHINE — CTF Session Complete" >> "\$NOTIFY_FILE"
+if [ -n "\$FLAGS" ]; then
+  echo "  MACHINE — CTF Session Complete" >> "\$NOTIFY_FILE"
+else
+  echo "  MACHINE — CTF Session Failed" >> "\$NOTIFY_FILE"
+fi
 echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
 echo "  Challenge: \$(basename "\$CHALLENGE_DIR")" >> "\$NOTIFY_FILE"
 echo "  Duration:  \${MINS}m \${SECS}s" >> "\$NOTIFY_FILE"
+echo "  Attempts:  \$ATTEMPT" >> "\$NOTIFY_FILE"
 echo "  Status:    \$SESSION_STATUS" >> "\$NOTIFY_FILE"
 if [ -n "\$FLAGS" ]; then
   echo "" >> "\$NOTIFY_FILE"
@@ -398,6 +587,7 @@ if [ -n "\$MY_TTY" ] && [ -w "\$MY_TTY" ]; then
   printf '\a' > "\$MY_TTY" 2>/dev/null
 fi
 
+kill \$OOM_WATCHDOG_PID 2>/dev/null || true
 rm -f "\$PID_FILE"
 RUNNER_EOF
     chmod +x "$RUNNER"
@@ -617,7 +807,7 @@ STEP 5: After writing $WRITEUP_FILE, run:
   python3 $SCRIPT_DIR/tools/knowledge.py add $WRITEUP_FILE
 STEP 6: Update knowledge/index.md with this challenge entry
 
-Flag formats: DH{...}, FLAG{...}, flag{...}, CTF{...}, GoN{...}, CYAI{...}
+Flag formats: $FLAG_DISPLAY
 PROMPT_EOF
 
     # Write runner script
@@ -634,23 +824,157 @@ CHALLENGE_DIR="$CHALLENGE_DIR"
 WRITEUP_FILE="$WRITEUP_FILE"
 KNOWLEDGE_PY="$KNOWLEDGE_PY"
 TIMEOUT_VAL=$TIMEOUT
+MAX_RETRIES_VAL=$MAX_RETRIES
+MEM_LIMIT_GB=$MEM_LIMIT_GB
 MY_TTY="$(tty 2>/dev/null || echo '')"
+
+# --- OOM Prevention ---
+MEM_LIMIT_KB=\$((MEM_LIMIT_GB * 1024 * 1024))
+ulimit -v \$MEM_LIMIT_KB 2>/dev/null || true
+echo "[*] Memory limit: \${MEM_LIMIT_GB}GB (ulimit -v \${MEM_LIMIT_KB}KB)" >> "\$REPORT_DIR/session.log"
+
+_oom_watchdog() {
+  local limit_kb=\$((MEM_LIMIT_GB * 1024 * 1024))
+  while true; do
+    sleep 10
+    local rss_total=0
+    for pid in \$(pgrep -P \$\$ 2>/dev/null); do
+      local rss=\$(awk '/VmRSS/{print \$2}' /proc/\$pid/status 2>/dev/null || echo 0)
+      rss_total=\$((rss_total + rss))
+    done
+    if [ "\$rss_total" -gt "\$limit_kb" ] 2>/dev/null; then
+      echo "[!] OOM WATCHDOG: children RSS \${rss_total}KB > limit \${limit_kb}KB — killing child processes" >> "\$REPORT_DIR/session.log"
+      pkill -TERM -P \$\$ 2>/dev/null || true
+      sleep 2
+      pkill -KILL -P \$\$ 2>/dev/null || true
+      break
+    fi
+  done
+}
+_oom_watchdog &
+OOM_WATCHDOG_PID=\$!
 
 CLAUDE_CMD="claude -p"
 if [ "\$TIMEOUT_VAL" -gt 0 ] 2>/dev/null; then
   CLAUDE_CMD="timeout \$TIMEOUT_VAL claude -p"
 fi
 
-\$CLAUDE_CMD "\$(cat "\$PROMPT_FILE")" --permission-mode bypassPermissions --model "\$MODEL" --output-format stream-json --verbose 2>&1 | python3 -u "\$SCRIPT_DIR/tools/stream_parser.py" "\$REPORT_DIR/session.log"
-CLAUDE_EXIT=\$?
+# === Retry loop: keep trying until flag found ===
+ATTEMPT=0
+FLAGS=""
 
+while true; do
+  ATTEMPT=\$((ATTEMPT + 1))
+  echo "" >> "\$REPORT_DIR/session.log"
+  echo "═══════════════════════════════════════" >> "\$REPORT_DIR/session.log"
+  echo "=== ATTEMPT \$ATTEMPT (started \$(date)) ===" >> "\$REPORT_DIR/session.log"
+  echo "═══════════════════════════════════════" >> "\$REPORT_DIR/session.log"
+
+  # Build prompt: on retry, append previous failure context
+  if [ \$ATTEMPT -gt 1 ]; then
+    CURRENT_PROMPT="\$REPORT_DIR/prompt_attempt_\${ATTEMPT}.txt"
+    cp "\$PROMPT_FILE" "\$CURRENT_PROMPT"
+    {
+      echo ""
+      echo "═══ RETRY ATTEMPT \$ATTEMPT ═══"
+      echo "Previous \$((ATTEMPT - 1)) attempt(s) FAILED to capture the flag."
+      echo ""
+      echo "=== Previous session log (last 150 lines) ==="
+      tail -150 "\$REPORT_DIR/session.log" 2>/dev/null || true
+      echo ""
+      if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
+        echo "=== Checkpoint from previous attempt ==="
+        cat "\$CHALLENGE_DIR/checkpoint.json"
+        echo ""
+      fi
+      if [ -f "\$CHALLENGE_DIR/solve.py" ]; then
+        echo "=== Previous solve.py ==="
+        cat "\$CHALLENGE_DIR/solve.py"
+        echo ""
+      fi
+      echo "CRITICAL INSTRUCTIONS FOR RETRY:"
+      echo "1. You MUST try a FUNDAMENTALLY DIFFERENT approach than previous attempts."
+      echo "2. Analyze WHY the previous attempt failed before starting."
+      echo "3. Read any existing artifacts in \$CHALLENGE_DIR for context."
+      echo "4. Do NOT repeat the same strategy that already failed."
+      echo "5. Consider: different vulnerability class, different exploit technique, re-analyzing the binary/source."
+    } >> "\$CURRENT_PROMPT"
+  else
+    CURRENT_PROMPT="\$PROMPT_FILE"
+  fi
+
+  \$CLAUDE_CMD "\$(cat "\$CURRENT_PROMPT")" --permission-mode bypassPermissions --model "\$MODEL" --output-format stream-json --verbose 2>&1 | python3 -u "\$SCRIPT_DIR/tools/stream_parser.py" "\$REPORT_DIR/session.log"
+  CLAUDE_EXIT=\$?
+
+  # Check for flags — prioritize verified remote flags over session.log grep
+  FLAGS=""
+  FLAG_SOURCE=""
+
+  # Priority 1: flag_captured.txt (written by verifier after remote execution)
+  if [ -f "\$CHALLENGE_DIR/flag_captured.txt" ]; then
+    VERIFIED_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/flag_captured.txt" 2>/dev/null | sort -u || true)
+    if [ -n "\$VERIFIED_FLAGS" ]; then
+      FLAGS="\$VERIFIED_FLAGS"
+      FLAG_SOURCE="remote_verified"
+    fi
+  fi
+
+  # Priority 2: remote_output.txt (verifier's remote execution output)
+  if [ -z "\$FLAGS" ] && [ -f "\$CHALLENGE_DIR/remote_output.txt" ]; then
+    REMOTE_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/remote_output.txt" 2>/dev/null | grep -vE '\{(\.\.\.|flag|FLAG|xxx|test|PLACEHOLDER)\}' | sort -u || true)
+    if [ -n "\$REMOTE_FLAGS" ]; then
+      FLAGS="\$REMOTE_FLAGS"
+      FLAG_SOURCE="remote_output"
+    fi
+  fi
+
+  # Priority 3: session.log — ONLY if checkpoint shows verifier completed
+  if [ -z "\$FLAGS" ]; then
+    CHECKPOINT_OK=false
+    if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
+      CP_STATUS=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('status',''))" 2>/dev/null || echo "")
+      CP_AGENT=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('agent',''))" 2>/dev/null || echo "")
+      if [ "\$CP_STATUS" = "completed" ] && [ "\$CP_AGENT" = "verifier" ]; then
+        CHECKPOINT_OK=true
+      fi
+    fi
+
+    if [ "\$CHECKPOINT_OK" = true ]; then
+      SESSION_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|flag|FLAG|xxx|test|PLACEHOLDER)\}' | sort -u || true)
+      if [ -n "\$SESSION_FLAGS" ]; then
+        FLAGS="\$SESSION_FLAGS"
+        FLAG_SOURCE="session_log_verified"
+      fi
+    fi
+  fi
+
+  if [ -n "\$FLAGS" ]; then
+    echo "" >> "\$REPORT_DIR/session.log"
+    echo "FLAGS FOUND on attempt \$ATTEMPT (source: \$FLAG_SOURCE):" >> "\$REPORT_DIR/session.log"
+    echo "\$FLAGS" >> "\$REPORT_DIR/session.log"
+    echo "\$FLAGS" > "\$REPORT_DIR/flags.txt"
+    break
+  fi
+
+  echo "" >> "\$REPORT_DIR/session.log"
+  echo "NO FLAGS FOUND (attempt \$ATTEMPT)" >> "\$REPORT_DIR/session.log"
+
+  # Check retry limit (0 = unlimited)
+  if [ "\$MAX_RETRIES_VAL" -gt 0 ] 2>/dev/null && [ \$ATTEMPT -ge "\$MAX_RETRIES_VAL" ]; then
+    echo "MAX RETRIES (\$MAX_RETRIES_VAL) reached. Giving up." >> "\$REPORT_DIR/session.log"
+    break
+  fi
+
+  echo "=== RETRYING in 5 seconds... ===" >> "\$REPORT_DIR/session.log"
+  sleep 5
+done
+
+echo '' >> "\$REPORT_DIR/session.log"
 echo '=== SESSION COMPLETE ===' >> "\$REPORT_DIR/session.log"
+echo "Timestamp: \$(date)" >> "\$REPORT_DIR/session.log"
+echo "Total attempts: \$ATTEMPT" >> "\$REPORT_DIR/session.log"
 
-FLAGS=\$(grep -oE '(DH|FLAG|flag|CTF|GoN|CYAI)\{[^}]+\}' "\$REPORT_DIR/session.log" 2>/dev/null | sort -u || true)
-if [ -n "\$FLAGS" ]; then
-  echo "\$FLAGS" > "\$REPORT_DIR/flags.txt"
-fi
-
+# Index writeup if exists
 if [ ! -s "\$WRITEUP_FILE" ]; then
   echo '[*] Writeup not found, generating from artifacts...' >> "\$REPORT_DIR/session.log"
   for md in "\$CHALLENGE_DIR"/*.md "\$REPORT_DIR"/*.md; do
@@ -662,9 +986,13 @@ else
 fi
 
 FINAL_EXIT=\$(bash "\$SCRIPT_DIR/machine.sh" _exit_code "\$REPORT_DIR" 2>/dev/null || echo 0)
+
+# Determine session status: flag found = completed, otherwise incomplete
 SESSION_STATUS='completed'
-[ "\$CLAUDE_EXIT" -eq 124 ] 2>/dev/null && SESSION_STATUS='timeout'
-[ "\$CLAUDE_EXIT" -ne 0 ] 2>/dev/null && SESSION_STATUS='failed'
+if [ -z "\$FLAGS" ]; then
+  SESSION_STATUS='incomplete'
+fi
+
 bash "\$SCRIPT_DIR/machine.sh" _summary "\$REPORT_DIR" learn "\$CHALLENGE_DIR" "\$START_TS" "\$FINAL_EXIT" "\$SESSION_STATUS" 2>/dev/null || true
 
 # === Terminal notification ===
@@ -676,10 +1004,15 @@ SECS=\$(( ELAPSED % 60 ))
 NOTIFY_FILE="\$REPORT_DIR/result.txt"
 echo "" > "\$NOTIFY_FILE"
 echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
-echo "  MACHINE — Learn Session Complete" >> "\$NOTIFY_FILE"
+if [ -n "\$FLAGS" ]; then
+  echo "  MACHINE — Learn Session Complete" >> "\$NOTIFY_FILE"
+else
+  echo "  MACHINE — Learn Session Failed" >> "\$NOTIFY_FILE"
+fi
 echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
 echo "  Challenge: \$(basename "\$CHALLENGE_DIR")" >> "\$NOTIFY_FILE"
 echo "  Duration:  \${MINS}m \${SECS}s" >> "\$NOTIFY_FILE"
+echo "  Attempts:  \$ATTEMPT" >> "\$NOTIFY_FILE"
 echo "  Status:    \$SESSION_STATUS" >> "\$NOTIFY_FILE"
 if [ -n "\$FLAGS" ]; then
   echo "" >> "\$NOTIFY_FILE"
@@ -704,6 +1037,7 @@ if [ -n "\$MY_TTY" ] && [ -w "\$MY_TTY" ]; then
   printf '\a' > "\$MY_TTY" 2>/dev/null
 fi
 
+kill \$OOM_WATCHDOG_PID 2>/dev/null || true
 rm -f "\$PID_FILE"
 RUNNER_EOF
     chmod +x "$RUNNER"
@@ -958,9 +1292,11 @@ RUNNER_EOF
     echo "  ./machine.sh logs [session_id]                       Tail session log(s)"
     echo ""
     echo "Global flags:"
-    echo "  --json       Output in JSON format"
-    echo "  --timeout N  Set timeout in seconds"
-    echo "  --dry-run    Show plan without executing"
+    echo "  --json         Output in JSON format"
+    echo "  --timeout N    Set timeout in seconds"
+    echo "  --dry-run      Show plan without executing"
+    echo "  --flag FORMAT  Add flag prefix (e.g., --flag NEWCTF → matches NEWCTF{...})"
+    echo "                 Saved to config.json for future runs"
     echo ""
     echo "Exit codes:"
     echo "  0  = clean"
