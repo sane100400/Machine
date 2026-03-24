@@ -139,88 +139,20 @@ strings /lib/x86_64-linux-gnu/libc.so.6 | grep "GNU C Library"
 
 기법별 상세: `python3 $MACHINE_ROOT/tools/knowledge.py search "tcache poisoning"`
 
-## Failure Decision Tree
+## Failure Handling
 
-### Global Failure Counter
+실패 시 decision_tree.py를 호출하여 다음 시도할 행동을 받는다:
 ```bash
-# Record each failed approach
-python3 $MACHINE_ROOT/tools/state.py set --key fail_count --val <N> \
-    --src /tmp/fail_log.txt --agent pwn
-# fail_count >= 3 same approach → STOP, pivot to next branch
-# fail_count >= 5 total → search writeups:
-#   python3 $MACHINE_ROOT/tools/knowledge.py search "<challenge_name> writeup"
-```
+# 다음 행동 조회
+python3 $MACHINE_ROOT/tools/decision_tree.py next --agent pwn --trigger <trigger_name>
+# Triggers: leak_failure, rip_failure, payload_failure, heap_selection, remote_failure
+# heap_selection은 --context '{"glibc":"2.35"}' 로 glibc 버전 전달
 
-### Branch 1: Leak Failure
-```
-TRIGGER: No info leak after 2 attempts (no libc/stack/heap address obtained)
-ACTION:  Switch leak method in order:
-  1. puts/printf GOT leak via ROP (PIE OFF)
-  2. Format string %p leak (if printf with user input exists)
-  3. Partial overwrite (PIE ON, 12-bit entropy bruteforce)
-  4. ret2dlresolve (no leak needed)
-  5. Heap-based leak (unsorted bin fd pointer)
-MAX:     2 attempts per method
-NEXT:    After all 5 exhausted → record "leak_impossible" → FAIL to orchestrator
-STATE:   leak_method, leak_attempts
-```
+# 실패 기록 (다음 호출 시 자동으로 다음 방법 리턴)
+python3 $MACHINE_ROOT/tools/decision_tree.py record --agent pwn --trigger <trigger> --action-id <id>
 
-### Branch 2: RIP/Control Failure
-```
-TRIGGER: Crash but no RIP control (segfault at unexpected address)
-ACTION:  Diagnose in order:
-  1. Re-verify offset: gdb -batch -ex "r < /tmp/cyclic" -ex "x/gx $rsp" ./binary
-  2. Check canary: gdb -batch -ex "x/gx $rbp-0x8" → if canary, add leak step
-  3. Check stack pivot needed: buffer too small for ROP → pivot to .bss/heap
-  4. Check PIE: base address randomized → need PIE leak first
-MAX:     2 attempts per sub-check
-NEXT:    If offset verified + canary handled + still no control → FAIL with GDB crash dump
-STATE:   rip_control_method, rip_control_attempts
-```
-
-### Branch 3: Payload/Shell Failure
-```
-TRIGGER: RIP controlled but no shell (crash during ROP chain or one_gadget)
-ACTION:  Fix in order:
-  1. Stack alignment: add extra `ret` gadget before system/execve (movaps issue)
-  2. one_gadget constraints: try all one_gadget results with -l 2
-  3. Switch to execve ROP: pop rdi; pop rsi; pop rdx; syscall
-  4. Switch to FSOP (glibc >= 2.34): _IO_list_all overwrite
-  5. Switch to ret2dlresolve (bypass FULL RELRO)
-MAX:     2 attempts per method
-NEXT:    After all exhausted → FAIL with "payload delivery blocked" + all attempted methods
-STATE:   payload_method, payload_attempts
-```
-
-### Branch 4: Heap Technique Selection
-```
-TRIGGER: Heap challenge identified (malloc/free in vuln functions)
-ACTION:  Select technique by glibc version:
-  glibc < 2.26:  fastbin dup → __malloc_hook overwrite
-  glibc 2.26-2.31: tcache poisoning → __free_hook overwrite
-  glibc 2.32-2.33: tcache poisoning + safe-linking bypass (heap leak required) → __free_hook
-  glibc >= 2.34: tcache poisoning + safe-linking → FSOP (_IO_list_all)
-
-  If selected technique fails after 2 attempts:
-    fastbin dup FAIL → try unsorted bin attack → try House of Orange
-    tcache FAIL → try fastbin dup (if count manipulable) → try large bin attack
-MAX:     2 attempts per house technique
-NEXT:    After 3 different house techniques fail → search knowledge:
-         python3 $MACHINE_ROOT/tools/knowledge.py search "house of <X>"
-STATE:   heap_technique, glibc_version, heap_attempts
-```
-
-### Branch 5: Remote-Only Failure
-```
-TRIGGER: Local exploit works but remote fails
-ACTION:  Diagnose in order:
-  1. libc version mismatch: strings on remote libc (if downloadable) or leak + database lookup
-  2. Timeout: increase sleep/recv timeouts in solve.py
-  3. ASLR bruteforce needed: run in loop (max 100 iterations for partial overwrite)
-  4. Different binary version: re-check remote binary if downloadable
-MAX:     3 remote attempts with adjustments
-NEXT:    FAIL with "remote environment mismatch" + specific difference identified
-STATE:   remote_attempts, remote_failure_reason
+# 현재 상태 확인
+python3 $MACHINE_ROOT/tools/decision_tree.py status --agent pwn
 ```
 
 ## 리서치

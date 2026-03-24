@@ -81,40 +81,12 @@ If ANY probe reveals inconsistency → downgrade verdict (PASS→RETRY or RETRY�
 
 ### RETRY Resolution Path
 
-When verdict is RETRY (1/3 or 2/3 local passes), diagnose and prescribe:
-
+RETRY (1/3 or 2/3) 시 decision_tree.py로 타입 분류:
+```bash
+python3 $MACHINE_ROOT/tools/decision_tree.py next --agent verifier --trigger retry_resolution
+# TYPE A (Race): retry loop/sleep 처방 | TYPE B (ASLR): 16회 실행, 25% PASS | TYPE C (Flaky): fresh state 보장
 ```
-STEP 1: Identify failure pattern
-  - All failures at same point? → deterministic bug
-  - Random failures? → race condition or ASLR-dependent
-
-STEP 2: Classify RETRY type
-
-  TYPE A — Timing/Race (1-2 successes, failures differ each run):
-    PRESCRIPTION: "chain agent: add retry loop / increase sleep / use synchronization"
-    ESCALATION: If same solve.py re-sent → FAIL (do not re-verify unchanged code)
-
-  TYPE B — ASLR Partial (success when lucky, fail on bad guess):
-    PRESCRIPTION: "Expected for N-bit entropy bruteforce. Run 16 times."
-    ACTION: Run 16 times. Pass threshold: >=4/16 (25%)
-
-  TYPE C — Environment Flaky (inconsistent failure pattern):
-    PRESCRIPTION: "chain agent: ensure exploit handles fresh process state"
-    ACTION: Restart binary between each test run
-
-STEP 3: Record
-  python3 $MACHINE_ROOT/tools/state.py set --key retry_type --val "<A|B|C>" \
-      --src /tmp/local_run.txt --agent verifier
-
-STEP 4: Report typed diagnosis
-  [HANDOFF RETRY type=<A|B|C>]
-  - Success rate: <X>/3
-  - Failure pattern: <description>
-  - Prescription: <specific fix>
-
-IMPORTANT: If orchestrator sends EXACT SAME solve.py after RETRY (type A or C),
-verdict = FAIL. Do not re-verify unchanged code.
-```
+**동일 solve.py 재제출 시 FAIL** (수정 없는 재시도 금지).
 
 ## Tools (condensed)
 

@@ -71,42 +71,19 @@ exploit이 실패하면:
 4. 페이로드 수정 후 재시도
 5. 3회 실패 → web 에이전트에게 다시 분석 요청 (HANDOFF with FAIL)
 
-## Root Cause Analysis Protocol
+## Root Cause Analysis
 
-When solve.py fails on Docker, diagnose WHETHER the vulnerability analysis is wrong vs the payload is wrong:
-
-### Step 1: Manual Endpoint Test
+Docker 실패 시 원인 분류 후 decision_tree.py 호출:
 ```bash
-# Test the vulnerable endpoint manually (without full exploit)
-curl -v http://localhost:<port>/<vuln_endpoint> -d '<simple_test_payload>'
-```
+python3 $MACHINE_ROOT/tools/decision_tree.py next --agent web-docker --trigger docker_failure
+# Actions: test_endpoint → fix_payload (3x) → report_vuln_wrong → fix_docker (2x)
 
-### Step 2: Classify Failure
+python3 $MACHINE_ROOT/tools/decision_tree.py record --agent web-docker --trigger docker_failure --action-id <id>
 ```
-IF manual test shows vulnerability EXISTS (error message changes, behavior differs):
-  → PAYLOAD WRONG — vulnerability is real, solve.py payload needs fixing
-  → Fix: adjust payload encoding, escaping, content-type, parameter name
-  → MAX 3 payload fixes, then FAIL back to web agent with specific error
-
-IF manual test shows NO vulnerability (same response for any input):
-  → VULN WRONG — web agent's analysis is incorrect
-  → FAIL immediately to web agent with:
-    [HANDOFF FAIL] Vulnerability not confirmed at <endpoint>
-    - Tested: <payload> → Response: <snippet>
-    - Diagnosis: <vuln_type> not present
-    - Action: re-analyze source
-
-IF Docker itself fails to start:
-  → ENV ISSUE — not web agent's fault
-  → Fix Docker config, retry (MAX 2 attempts)
-```
-
-### Step 3: Record Diagnosis
-```bash
-python3 $MACHINE_ROOT/tools/state.py set --key docker_diagnosis \
-    --val "<payload_wrong|vuln_wrong|env_issue>:<details>" \
-    --src /tmp/docker_debug.txt --agent web-docker
-```
+1. manual curl로 endpoint 직접 테스트
+2. vuln 존재 → PAYLOAD WRONG (페이로드 수정)
+3. vuln 미존재 → VULN WRONG (즉시 web agent로 FAIL + 증거)
+4. Docker 자체 문제 → ENV ISSUE (Docker 설정 수정)
 
 ## 출력
 

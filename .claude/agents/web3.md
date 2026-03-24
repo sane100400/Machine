@@ -184,68 +184,16 @@ receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
 print(f"Status: {receipt['status']}")
 ```
 
-## Tool Conflict Resolution
+## Failure Handling
 
-### Slither vs Mythril Disagreement
-```
-IF Slither reports vuln AND Mythril does NOT confirm:
-  → Likely false positive from Slither. Verify manually by reading the code path.
+```bash
+python3 $MACHINE_ROOT/tools/decision_tree.py next --agent web3 --trigger <trigger_name>
+# Triggers: forge_failure, vuln_misid, onchain_failure
 
-IF Mythril reports vuln AND Slither does NOT detect:
-  → Mythril found a deeper path (symbolic execution). Likely real. Prioritize this.
-
-IF both report DIFFERENT vulns:
-  → Both may be real. Prioritize by exploitability:
-    reentrancy > access control > integer overflow > others
-
-IF neither tool reports anything:
-  → Manual code review. Focus on: business logic, cross-contract, proxy/delegatecall, oracle manipulation
+python3 $MACHINE_ROOT/tools/decision_tree.py record --agent web3 --trigger <trigger> --action-id <id>
 ```
 
-## Failure Decision Tree
-
-### Branch 1: forge test Failure
-```
-TRIGGER: forge test -vvvv fails
-ACTION:  Diagnose in order:
-  1. Compilation error → fix Solidity syntax, check compiler version (pragma)
-  2. Revert without message → add vm.expectRevert() or check require() conditions
-  3. Revert with message → read the require() message, fix exploit logic
-  4. Gas limit → increase gas: forge test --gas-limit 30000000
-  5. Fork test fails → check RPC_URL is valid, block number is correct
-  6. State setup wrong → verify setUp() deploys contracts in correct order
-MAX:     3 fix-and-retry cycles
-NEXT:    Still fails → re-examine vulnerability hypothesis
-STATE:   forge_error_type, forge_attempts
-```
-
-### Branch 2: Vulnerability Misidentification
-```
-TRIGGER: Exploit targets wrong vulnerability (e.g., reentrancy guard exists)
-ACTION:  Systematic recheck:
-  1. Re-read all modifiers: nonReentrant, onlyOwner, require() guards
-  2. Check Solidity version: < 0.8 allows overflow, >= 0.8 needs unchecked{}
-  3. Check inheritance chain: base contract may have hidden functionality
-  4. Check storage layout: proxy contracts may have slot collisions
-  5. Check external calls: which contracts are called and can they be controlled?
-MAX:     2 analysis rounds
-NEXT:    No exploitable vuln found → FAIL with contract analysis summary
-STATE:   vuln_recheck_round
-```
-
-### Branch 3: On-Chain Execution Failure
-```
-TRIGGER: forge test passes locally but cast send fails on-chain
-ACTION:  Fix in order:
-  1. Gas estimation: cast estimate <addr> "exploit()" → use returned gas + 20%
-  2. Nonce: cast nonce <wallet> → ensure correct nonce
-  3. Block dependency: if exploit depends on block.number, check timing
-  4. Front-running: if MEV risk, use Flashbots bundle or private mempool
-  5. Contract state changed: re-read current state with cast call before retry
-MAX:     3 on-chain attempts
-NEXT:    FAIL with "on-chain execution blocked: <reason>"
-STATE:   onchain_attempts, onchain_error
-```
+**Tool conflict rule**: Slither-only 결과 = 수동 확인 필요. Mythril-only = 우선 신뢰 (symbolic exec). 둘 다 다른 vuln 보고 시 exploitability 순: reentrancy > access control > overflow.
 
 ## 리서치
 
