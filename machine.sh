@@ -497,7 +497,7 @@ while true; do
     if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
       CP_STATUS=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('status',''))" 2>/dev/null || echo "")
       CP_AGENT=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('agent',''))" 2>/dev/null || echo "")
-      if [ "\$CP_STATUS" = "completed" ] && [ "\$CP_AGENT" = "verifier" ]; then
+      if [ "\$CP_STATUS" = "completed" ] && { [ "\$CP_AGENT" = "verifier" ] || [ "\$CP_AGENT" = "reporter" ]; }; then
         CHECKPOINT_OK=true
       fi
     fi
@@ -521,6 +521,16 @@ while true; do
 
   echo "" >> "\$REPORT_DIR/session.log"
   echo "NO FLAGS FOUND (attempt \$ATTEMPT)" >> "\$REPORT_DIR/session.log"
+
+  # Stop if pipeline fully completed (reporter done) — no point retrying
+  if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
+    _CP_AGENT=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('agent',''))" 2>/dev/null || echo "")
+    _CP_STATUS=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('status',''))" 2>/dev/null || echo "")
+    if [ "\$_CP_STATUS" = "completed" ] && [ "\$_CP_AGENT" = "reporter" ]; then
+      echo "Pipeline fully completed (reporter done) but no flag captured. Stopping." >> "\$REPORT_DIR/session.log"
+      break
+    fi
+  fi
 
   # Check retry limit (0 = unlimited)
   if [ "\$MAX_RETRIES_VAL" -gt 0 ] 2>/dev/null && [ \$ATTEMPT -ge "\$MAX_RETRIES_VAL" ]; then
@@ -934,7 +944,7 @@ while true; do
     if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
       CP_STATUS=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('status',''))" 2>/dev/null || echo "")
       CP_AGENT=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('agent',''))" 2>/dev/null || echo "")
-      if [ "\$CP_STATUS" = "completed" ] && [ "\$CP_AGENT" = "verifier" ]; then
+      if [ "\$CP_STATUS" = "completed" ] && { [ "\$CP_AGENT" = "verifier" ] || [ "\$CP_AGENT" = "reporter" ]; }; then
         CHECKPOINT_OK=true
       fi
     fi
@@ -958,6 +968,16 @@ while true; do
 
   echo "" >> "\$REPORT_DIR/session.log"
   echo "NO FLAGS FOUND (attempt \$ATTEMPT)" >> "\$REPORT_DIR/session.log"
+
+  # Stop if pipeline fully completed (reporter done) — no point retrying
+  if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
+    _CP_AGENT=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('agent',''))" 2>/dev/null || echo "")
+    _CP_STATUS=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('status',''))" 2>/dev/null || echo "")
+    if [ "\$_CP_STATUS" = "completed" ] && [ "\$_CP_AGENT" = "reporter" ]; then
+      echo "Pipeline fully completed (reporter done) but no flag captured. Stopping." >> "\$REPORT_DIR/session.log"
+      break
+    fi
+  fi
 
   # Check retry limit (0 = unlimited)
   if [ "\$MAX_RETRIES_VAL" -gt 0 ] 2>/dev/null && [ \$ATTEMPT -ge "\$MAX_RETRIES_VAL" ]; then
