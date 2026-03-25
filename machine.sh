@@ -312,6 +312,21 @@ print(json.dumps(plan, indent=2))
       CLAUDE_CMD="timeout $TIMEOUT claude -p"
     fi
 
+    # Read challenge.md if present (description, flag format, constraints)
+    CHALLENGE_META=""
+    for desc_file in "$CHALLENGE_DIR/challenge.md" "$CHALLENGE_DIR/CHALLENGE.md" "$CHALLENGE_DIR/README.md" "$CHALLENGE_DIR/description.md"; do
+      if [ -f "$desc_file" ]; then
+        CHALLENGE_META="$(cat "$desc_file")"
+        # Auto-detect flag format from challenge.md
+        CUSTOM_FLAG_FMT="$(grep -oP '(?i)flag\s*(format|regex|형식)[^`]*`([^`]+)`' "$desc_file" 2>/dev/null | grep -oP '`[^`]+`' | tr -d '`' | head -1)"
+        if [ -n "$CUSTOM_FLAG_FMT" ]; then
+          echo "[*] Flag format from challenge.md: $CUSTOM_FLAG_FMT" >> "$REPORT_DIR/session.log" 2>/dev/null
+        fi
+        echo "[*] Loaded challenge description from $(basename "$desc_file")" >> "$REPORT_DIR/session.log" 2>/dev/null
+        break
+      fi
+    done
+
     # Write prompt to file (avoids heredoc escaping hell in nohup)
     PROMPT_FILE="$REPORT_DIR/prompt.txt"
     cat > "$PROMPT_FILE" <<PROMPT_EOF
@@ -322,6 +337,15 @@ Files found: $FILES
 Report directory: $REPORT_DIR
 Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
 $([ -n "$SERVER" ] && echo "Target server: $SERVER")
+$(if [ -n "$CHALLENGE_META" ]; then
+echo "
+=== CHALLENGE DESCRIPTION (from challenge.md) ===
+$CHALLENGE_META
+=== END DESCRIPTION ===
+
+IMPORTANT: Use any flag format regex, charset constraints, or server info from the description above.
+These are CRITICAL constraints — apply them to your solver from the start."
+fi)
 
 MANDATORY: Follow CLAUDE.md pipeline rules.
 
@@ -759,6 +783,18 @@ RUNNER_EOF
 
     START_TS="$(date +%s)"
 
+    # Read challenge.md if present
+    CHALLENGE_META=""
+    for desc_file in "$CHALLENGE_DIR/challenge.md" "$CHALLENGE_DIR/CHALLENGE.md" "$CHALLENGE_DIR/README.md" "$CHALLENGE_DIR/description.md"; do
+      if [ -f "$desc_file" ]; then
+        CHALLENGE_META="$(cat "$desc_file")"
+        CUSTOM_FLAG_FMT="$(grep -oP '(?i)flag\s*(format|regex|형식)[^`]*`([^`]+)`' "$desc_file" 2>/dev/null | grep -oP '`[^`]+`' | tr -d '`' | head -1)"
+        [ -n "$CUSTOM_FLAG_FMT" ] && echo "[*] Flag format from challenge.md: $CUSTOM_FLAG_FMT" >> "$REPORT_DIR/session.log" 2>/dev/null
+        echo "[*] Loaded challenge description from $(basename "$desc_file")" >> "$REPORT_DIR/session.log" 2>/dev/null
+        break
+      fi
+    done
+
     # Write prompt to file
     PROMPT_FILE="$REPORT_DIR/prompt.txt"
     cat > "$PROMPT_FILE" <<PROMPT_EOF
@@ -774,6 +810,15 @@ Report directory: $REPORT_DIR
 Writeup output: $WRITEUP_FILE
 Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
 $([ -n "$SERVER" ] && echo "Remote server: $SERVER (DO NOT access until local Docker exploit succeeds)")
+$(if [ -n "$CHALLENGE_META" ]; then
+echo "
+=== CHALLENGE DESCRIPTION (from challenge.md) ===
+$CHALLENGE_META
+=== END DESCRIPTION ===
+
+IMPORTANT: Use any flag format regex, charset constraints, or server info from the description above.
+These are CRITICAL constraints — apply them to your solver from the start."
+fi)
 
 MANDATORY: Follow CLAUDE.md pipeline rules.
 
