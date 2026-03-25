@@ -318,7 +318,7 @@ print(json.dumps(plan, indent=2))
       if [ -f "$desc_file" ]; then
         CHALLENGE_META="$(cat "$desc_file")"
         # Auto-detect flag format from challenge.md
-        CUSTOM_FLAG_FMT="$(grep -oP '(?i)flag\s*(format|regex|형식)[^`]*`([^`]+)`' "$desc_file" 2>/dev/null | grep -oP '`[^`]+`' | tr -d '`' | head -1)"
+        CUSTOM_FLAG_FMT="$(grep -oP '(?i)flag\s*(format|regex|형식)[^`]*`([^`]+)`' "$desc_file" 2>/dev/null | grep -oP '`[^`]+`' | tr -d '`' | head -1 || true)"
         if [ -n "$CUSTOM_FLAG_FMT" ]; then
           echo "[*] Flag format from challenge.md: $CUSTOM_FLAG_FMT" >> "$REPORT_DIR/session.log" 2>/dev/null
         fi
@@ -788,7 +788,7 @@ RUNNER_EOF
     for desc_file in "$CHALLENGE_DIR/challenge.md" "$CHALLENGE_DIR/CHALLENGE.md" "$CHALLENGE_DIR/README.md" "$CHALLENGE_DIR/description.md"; do
       if [ -f "$desc_file" ]; then
         CHALLENGE_META="$(cat "$desc_file")"
-        CUSTOM_FLAG_FMT="$(grep -oP '(?i)flag\s*(format|regex|형식)[^`]*`([^`]+)`' "$desc_file" 2>/dev/null | grep -oP '`[^`]+`' | tr -d '`' | head -1)"
+        CUSTOM_FLAG_FMT="$(grep -oP '(?i)flag\s*(format|regex|형식)[^`]*`([^`]+)`' "$desc_file" 2>/dev/null | grep -oP '`[^`]+`' | tr -d '`' | head -1 || true)"
         [ -n "$CUSTOM_FLAG_FMT" ] && echo "[*] Flag format from challenge.md: $CUSTOM_FLAG_FMT" >> "$REPORT_DIR/session.log" 2>/dev/null
         echo "[*] Loaded challenge description from $(basename "$desc_file")" >> "$REPORT_DIR/session.log" 2>/dev/null
         break
