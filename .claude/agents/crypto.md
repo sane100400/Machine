@@ -15,8 +15,30 @@ permissionMode: bypassPermissions
 
 1. **코드부터 읽는다** — 암호문만 보지 않는다. 구현의 약점이 핵심이다.
 2. **약점 먼저 파악** — 수학 공격은 약점 확인 후 구현. 무작정 brute force 금지.
-3. **SageMath로 수학 연산** — Python 직접 구현보다 Sage 내장 함수가 정확하고 빠르다.
-4. **"completed" = solve.py 실행 → 플래그 출력**.
+3. **SageMath 우선** — lattice/ECC/polynomial/exact arithmetic은 반드시 Sage로. Python 직접 구현 금지.
+4. **"completed" = solve 실행 → 플래그 출력**.
+5. **challenge.md의 flag format regex는 최우선 제약조건** — solver에 반드시 반영.
+
+## SageMath 사용법
+
+```bash
+# Sage 경로 (시스템 PATH에 없음 — 반드시 전체 경로 사용)
+SAGE=~/miniconda3/envs/sage/bin/sage
+
+# .sage 파일 실행 (권장 — Sage 문법 사용 가능)
+$SAGE solve.sage
+
+# 한 줄 실행
+$SAGE -c "print(factor(12345678901234567))"
+
+# Python 패키지는 Sage 환경에도 설치됨 (pycryptodome 등)
+$SAGE -c "from Crypto.Util.number import long_to_bytes; print(long_to_bytes(123))"
+```
+
+### 언제 .sage vs .py?
+- **`.sage` 사용**: lattice(LLL/BKZ), ECC(discrete_log), polynomial ring, RealField, matrix, factor, CRT
+- **`.py` 사용**: 단순 XOR, AES/DES(pycryptodome), hashcat 호출, z3 constraint solving
+- **판단 기준**: `from sage.all import *`가 필요하면 `.sage`, 아니면 `.py`
 
 ## 도구 스택
 
@@ -30,8 +52,8 @@ python3 ~/tools/RsaCtfTool/RsaCtfTool.py -n <n> -e <e> --uncipher <c> --attack w
 # 인수분해
 # factordb.com 조회 (WebFetch)
 # SageMath
-sage -c "factor(<n>)"
-sage -c "
+$SAGE -c "factor(<n>)"
+$SAGE -c "
 n = <n>
 # Pollard p-1
 p = n.factor()
@@ -52,7 +74,7 @@ n을 공유       → Common modulus attack
 ### SageMath 패턴
 ```python
 # Wiener
-sage -c "
+$SAGE -c "
 from sage.all import *
 n = <n>
 e = <e>
@@ -67,7 +89,7 @@ for i in range(len(cf)):
 "
 
 # Coppersmith (small message, partial key)
-sage -c "
+$SAGE -c "
 R.<x> = PolynomialRing(Zmod(<n>))
 f = (<known_prefix> + x)^<e> - <c>
 f = f.monic()
@@ -75,7 +97,7 @@ print(f.small_roots(X=2^<unknown_bits>, beta=1))
 "
 
 # ECC discrete log (small order)
-sage -c "
+$SAGE -c "
 p = <prime>
 E = EllipticCurve(GF(p), [<a>, <b>])
 G = E(<gx>, <gy>)
