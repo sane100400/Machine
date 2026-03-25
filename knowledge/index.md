@@ -16,11 +16,12 @@
 | [Mirage](challenges/Mirage.md) | rev | linear algebra / matrix equation / custom bignum (base-128 LE) | DH{fca5c7c52a86459f10ef963921a164d31c714328fd6de9f5fe} |
 | [towa](challenges/towa.md) | crypto | ECC Pohlig-Hellman + BSGS / smooth-order curve / AES-ECB | KAPO{b34a3ac564560bdea87ac5c9044b93f2ce5e6a5996b32ddc63b247ee60ad588b} |
 | PCG (learningdb) | crypto | LLL lattice reduction / polynomial PRNG / CVP embedding / AES-ECB | - |
-| circle_encryption (learningdb) | crypto | high-precision Newton quartic reversal / beam search / SageMath | KoS{...} |
+| [circle_encryption](challenges/circle_encryption.md) | crypto | high-precision quartic reversal / beam search / charset constraint scoring | KoS{C4n_y0u_us3_b1n4ry_s34rch_t0_f1nd_7he_f14g?} |
 | SU_Forensics (SUCTF2026) | forensics | Windows disk multi-artifact / evtx / TabState / uTools / Ollama / CherryStudio | SUCTF{39e850db5d740c54df4281e39fb3866d} |
 | SU_Artifact_Online (SUCTF2026) | misc | rune substitution / 5×5 cube command exec / PoW / constrained shell | SUCTF{Th1s_i5_@_Cub3_bu7_n0t_5ome7hing_u_pl4y} |
 | SU_CyberTrack (SUCTF2026) | osint | blog→Minecraft→X/Twitter→Discord→email / identity chain / MD5 | SUCTF{c4d1df3b3dbea17c886b447b7f913048} |
 | SU_MirrorBus9 (SUCTF2026) | misc | industrial bus / linear mod 65521 / 16-bit brute-force / session replay | SUCTF{mb9_file_only_flag_runtime_hardened} |
+| [fruits_market](challenges/fruits_market.md) | web | JSP webshell SSRF / CVE-2025-23061 Mongoose populate $where bypass / sift RCE / process.binding('spawn_sync') | DH{XXE_to_55RF_t0_RCE:aEGbjbE2zPfAWsI0wE+9Mw==} |
 
 ## Attempted / Failed
 
@@ -46,6 +47,7 @@
 - [web_jwt_algorithm_confusion](techniques/web_jwt_algorithm_confusion.md) — JWT RS256→HS256 + RSA public key recovery from signatures
 - [web_php_filter_chain_ssrf](techniques/web_php_filter_chain_ssrf.md) — PHP filter chain SSRF + wrapwrap JSON wrapper
 - [web_apache_rewrite_lfi_xss_chain](techniques/web_apache_rewrite_lfi_xss_chain.md) — Apache %3F path truncation + LFI→XSS→CSRF chain
+- [web_mongoose_populate_where_rce](techniques/web_mongoose_populate_where_rce.md) — CVE-2025-23061 Mongoose populate $where bypass via sift RCE
 - [web_ctf_techniques](techniques/web_ctf_techniques.md) — General web CTF reference
 
 ### FORENSICS
