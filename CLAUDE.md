@@ -8,6 +8,9 @@
 ## Mandatory Rules (NEVER VIOLATE)
 
 1. **Use Agent Teams for CTF.** Never solve directly. Spawn agents via `subagent_type="<role>"` from `.claude/agents/*.md`.
+   - **NEVER write solve code yourself.** If an agent fails, re-spawn with better context — do NOT take over and code.
+   - If agent returns without solving: analyze failure reason → add to HANDOFF context → re-spawn agent.
+   - Orchestrator's job: coordinate, not code. You are a manager, not an engineer.
 2. **Local flag files are FAKE.** Only `remote(host, port)` yields real flags.
 3. **Read `knowledge/index.md` before starting.** Check already solved/attempted challenges.
 4. **Record all results (success/failure) to `knowledge/challenges/`.**
