@@ -235,17 +235,24 @@ fi
 case "$MODE" in
   ctf)
     if [ -z "$TARGET" ]; then
-      echo "Usage: ./machine.sh ctf /path/to/challenge[.zip] [category]"
+      echo "Usage: ./machine.sh ctf /path/to/challenge[.zip] [category] [server]"
       echo "  category: pwn, rev, web, crypto, forensics, web3 (생략 시 자동 감지)"
+      echo "  Solves challenge + writes writeup + indexes to knowledge DB"
       exit $EXIT_ERROR
     fi
 
     CHALLENGE_DIR="$(extract_if_zip "$(realpath "$TARGET")")"
+    CHALLENGE_NAME="$(basename "$CHALLENGE_DIR")"
     CATEGORY="${SCOPE:-}"
     FILES=$(ls -1 "$CHALLENGE_DIR" 2>/dev/null | head -30)
     SESSION_ID="$TIMESTAMP"
     PID_FILE="$PID_DIR/${SESSION_ID}.pid"
-    mkdir -p "$REPORT_DIR"
+    KNOWLEDGE_PY="$SCRIPT_DIR/tools/knowledge.py"
+    CHALLENGES_DIR="$SCRIPT_DIR/knowledge/challenges"
+    TEMPLATE="$SCRIPT_DIR/knowledge/challenges/_template.md"
+    TEMPLATE_CONTENT="$(cat "$TEMPLATE" 2>/dev/null || echo '')"
+    WRITEUP_FILE="$CHALLENGES_DIR/${CHALLENGE_NAME}.md"
+    mkdir -p "$REPORT_DIR" "$CHALLENGES_DIR"
 
     # Validate category if provided
     if [ -n "$CATEGORY" ]; then
@@ -390,9 +397,12 @@ fi)
 
 Pass each agent's output to the next via structured HANDOFF.
 Save solve.py to $CHALLENGE_DIR/solve.py
-Save writeup to $REPORT_DIR/writeup.md
 
-STEP 5: Collect results — Update knowledge/index.md
+STEP 5: Write a detailed writeup to $WRITEUP_FILE
+Include: category, technique, environment, vulnerability, solve steps, key commands, failed approaches, flag.
+Then run: python3 $SCRIPT_DIR/tools/knowledge.py add $WRITEUP_FILE
+
+STEP 6: Update knowledge/index.md with this challenge entry
 
 Flag formats: $FLAG_DISPLAY
 PROMPT_EOF
@@ -589,6 +599,13 @@ if [ -z "\$FLAGS" ]; then
   SESSION_STATUS='incomplete'
 fi
 
+# Index writeup to knowledge DB if it was created
+WRITEUP_FILE="$WRITEUP_FILE"
+if [ -f "\$WRITEUP_FILE" ] && [ -s "\$WRITEUP_FILE" ]; then
+  echo "[*] Indexing writeup: \$WRITEUP_FILE" >> "\$REPORT_DIR/session.log"
+  python3 "\$SCRIPT_DIR/tools/knowledge.py" add "\$WRITEUP_FILE" >> "\$REPORT_DIR/session.log" 2>&1 || true
+fi
+
 bash "\$SCRIPT_DIR/machine.sh" _summary "\$REPORT_DIR" ctf "\$CHALLENGE_DIR" "\$START_TS" "\$FINAL_EXIT" "\$SESSION_STATUS" 2>/dev/null || true
 
 # === Terminal notification ===
@@ -731,415 +748,9 @@ RUNNER_EOF
         ;;
     esac
 
-    # --- Main learn mode: solve challenge + produce writeup ---
-    CHALLENGE_DIR="$(extract_if_zip "$(realpath "$TARGET")")"
-    CHALLENGE_NAME="$(basename "$CHALLENGE_DIR")"
-    CATEGORY="${SCOPE:-}"
-    FILES=$(ls -1 "$CHALLENGE_DIR" 2>/dev/null | head -30)
-    WRITEUP_FILE="$CHALLENGES_DIR/${CHALLENGE_NAME}.md"
-    SESSION_ID="$TIMESTAMP"
-    PID_FILE="$PID_DIR/${SESSION_ID}.pid"
-    mkdir -p "$REPORT_DIR"
-
-    # Validate category if provided
-    if [ -n "$CATEGORY" ]; then
-      case "$CATEGORY" in
-        pwn|rev|web|crypto|forensics|web3) ;;
-        *)
-          echo "[!] Invalid category: $CATEGORY"
-          echo "    Valid: pwn, rev, web, crypto, forensics, web3"
-          exit $EXIT_ERROR
-          ;;
-      esac
-    fi
-
-    if [ "$DRY_RUN" = true ]; then
-      echo "[DRY-RUN] Learn mode"
-      echo "  Challenge: $CHALLENGE_DIR"
-      echo "  Category:  ${CATEGORY:-auto-detect}"
-      [ -n "$SERVER" ] && echo "  Server:    $SERVER"
-      echo "  Files:     $FILES"
-      echo "  Model:     $MODEL"
-      echo "  Writeup:   $WRITEUP_FILE"
-      echo "  Report:    $REPORT_DIR"
-      exit $EXIT_CLEAN
-    fi
-
-    if [ "$JSON_OUTPUT" = false ]; then
-      show_banner "Learn Mode"
-      echo "╔══════════════════════════════════════════════╗"
-      echo "║  Challenge: $(basename "$CHALLENGE_DIR")"
-      echo "║  Category:  ${CATEGORY:-auto-detect}"
-      [ -n "$SERVER" ] && echo "║  Server:    $SERVER"
-      echo "║  Files:     $FILES"
-      echo "║  Model:     $MODEL"
-      echo "║  Writeup:   $WRITEUP_FILE"
-      echo "║  Report:    $REPORT_DIR"
-      echo "╠══════════════════════════════════════════════╣"
-      echo "║  Solving + writing up in background...       ║"
-      echo "║  Monitor:  tail -f $REPORT_DIR/session.log"
-      echo "╚══════════════════════════════════════════════╝"
-    fi
-
-    START_TS="$(date +%s)"
-
-    # Read challenge.md if present
-    CHALLENGE_META=""
-    for desc_file in "$CHALLENGE_DIR/challenge.md" "$CHALLENGE_DIR/CHALLENGE.md" "$CHALLENGE_DIR/README.md" "$CHALLENGE_DIR/description.md"; do
-      if [ -f "$desc_file" ]; then
-        CHALLENGE_META="$(cat "$desc_file")"
-        CUSTOM_FLAG_FMT="$(grep -oP '(?i)flag\s*(format|regex|형식)[^`]*`([^`]+)`' "$desc_file" 2>/dev/null | grep -oP '`[^`]+`' | tr -d '`' | head -1 || true)"
-        [ -n "$CUSTOM_FLAG_FMT" ] && echo "[*] Flag format from challenge.md: $CUSTOM_FLAG_FMT" >> "$REPORT_DIR/session.log" 2>/dev/null
-        echo "[*] Loaded challenge description from $(basename "$desc_file")" >> "$REPORT_DIR/session.log" 2>/dev/null
-        break
-      fi
-    done
-
-    # Write prompt to file
-    PROMPT_FILE="$REPORT_DIR/prompt.txt"
-    cat > "$PROMPT_FILE" <<PROMPT_EOF
-You are Machine Orchestrator in LEARN MODE.
-
-Your goal is to SOLVE this CTF challenge AND produce a detailed WRITEUP for the knowledge database.
-This is a learning exercise — prioritize understanding over speed.
-
-Challenge directory: $CHALLENGE_DIR
-Challenge name: $CHALLENGE_NAME
-Files found: $FILES
-Report directory: $REPORT_DIR
-Writeup output: $WRITEUP_FILE
-Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
-$([ -n "$SERVER" ] && echo "Remote server: $SERVER (DO NOT access until local Docker exploit succeeds)")
-$(if [ -n "$CHALLENGE_META" ]; then
-echo "
-=== CHALLENGE DESCRIPTION (from challenge.md) ===
-$CHALLENGE_META
-=== END DESCRIPTION ===
-
-IMPORTANT: Use any flag format regex, charset constraints, or server info from the description above.
-These are CRITICAL constraints — apply them to your solver from the start."
-fi)
-
-MANDATORY: Follow CLAUDE.md pipeline rules.
-
-═══ PHASE 1: SOLVE ═══
-
-STEP 1: Read knowledge/index.md — check if already solved
-STEP 2: Pre-check (file, strings, checksec on binaries)
-$(if [ -n "$CATEGORY" ]; then
-echo "STEP 3: Category is $CATEGORY (user-specified). Skip detection."
-else
-echo "STEP 3: Determine category: pwn / rev / web / crypto / forensics / web3"
-fi)
-STEP 4: Spawn pipeline agents:
-  PWN:       @pwn → @critic → @verifier → @reporter
-  REV:       @rev → @critic → @verifier → @reporter
-  WEB:       @web → @web-docker → @web-remote → @critic → @verifier → @reporter
-  CRYPTO:    @crypto → @critic → @verifier → @reporter
-  FORENSICS: @forensics → @critic → @verifier → @reporter
-  WEB3:      @web3 → @critic → @verifier → @reporter
-
-$([ -n "$SERVER" ] && echo "CRITICAL — WEB CHALLENGE 3-PHASE RULE:
-  Phase 1: Read ALL source code first. NO requests to any server.
-  Phase 2: docker compose up -d → exploit localhost. Verify 2/2 success.
-  Phase 3: ONLY after local success → run solve.py against $SERVER for real flag.
-  solve.py must have TARGET variable (LOCAL/REMOTE) for easy switching.")
-
-Save solve.py to $CHALLENGE_DIR/solve.py
-
-═══ PHASE 2: WRITEUP ═══
-
-After solving (or after best attempt), write a detailed writeup to $WRITEUP_FILE
-following this EXACT template:
-
-$TEMPLATE_CONTENT
-
-WRITEUP RULES:
-- 한국어로 작성
-- 분류: 카테고리 / 세부 기법 구체적으로 (예: pwn / heap / tcache poisoning / glibc 2.35)
-- 환경: checksec 결과, libc 버전, 아키텍처 전부 기록
-- 취약점: 한 줄로 핵심 취약점 요약
-- 풀이 흐름: 번호 매겨서 단계별로. 구체적 주소/오프셋 포함
-- 핵심 커맨드: 실제 사용한 exploit 코드의 핵심 부분 발췌
-- 삽질 포인트: 처음에 틀렸던 가정, 실패한 접근, 시간 소모한 부분 솔직하게 기록
-- 참고: 유사 문제, 사용한 기법의 참고 자료
-- Flag: 실제 획득한 플래그 (못 풀었으면 "미해결" + 이유)
-
-═══ PHASE 3: INDEX ═══
-
-STEP 5: After writing $WRITEUP_FILE, run:
-  python3 $SCRIPT_DIR/tools/knowledge.py add $WRITEUP_FILE
-STEP 6: Update knowledge/index.md with this challenge entry
-
-Flag formats: $FLAG_DISPLAY
-PROMPT_EOF
-
-    # Write runner script
-    RUNNER="$REPORT_DIR/runner.sh"
-    cat > "$RUNNER" <<RUNNER_EOF
-#!/bin/bash
-START_TS=$START_TS
-PROMPT_FILE="$PROMPT_FILE"
-REPORT_DIR="$REPORT_DIR"
-SCRIPT_DIR="$SCRIPT_DIR"
-PID_FILE="$PID_FILE"
-MODEL="$MODEL"
-CHALLENGE_DIR="$CHALLENGE_DIR"
-WRITEUP_FILE="$WRITEUP_FILE"
-KNOWLEDGE_PY="$KNOWLEDGE_PY"
-TIMEOUT_VAL=$TIMEOUT
-MAX_RETRIES_VAL=$MAX_RETRIES
-MEM_LIMIT_GB=$MEM_LIMIT_GB
-MY_TTY="$(tty 2>/dev/null || echo '')"
-
-# --- OOM Prevention ---
-MEM_LIMIT_KB=\$((MEM_LIMIT_GB * 1024 * 1024))
-ulimit -v \$MEM_LIMIT_KB 2>/dev/null || true
-echo "[*] Memory limit: \${MEM_LIMIT_GB}GB (ulimit -v \${MEM_LIMIT_KB}KB)" >> "\$REPORT_DIR/session.log"
-
-_oom_watchdog() {
-  local limit_kb=\$((MEM_LIMIT_GB * 1024 * 1024))
-  while true; do
-    sleep 10
-    local rss_total=0
-    for pid in \$(pgrep -P \$\$ 2>/dev/null); do
-      local rss=\$(awk '/VmRSS/{print \$2}' /proc/\$pid/status 2>/dev/null || echo 0)
-      rss_total=\$((rss_total + rss))
-    done
-    if [ "\$rss_total" -gt "\$limit_kb" ] 2>/dev/null; then
-      echo "[!] OOM WATCHDOG: children RSS \${rss_total}KB > limit \${limit_kb}KB — killing child processes" >> "\$REPORT_DIR/session.log"
-      pkill -TERM -P \$\$ 2>/dev/null || true
-      sleep 2
-      pkill -KILL -P \$\$ 2>/dev/null || true
-      break
-    fi
-  done
-}
-_oom_watchdog &
-OOM_WATCHDOG_PID=\$!
-
-CLAUDE_CMD="claude -p"
-if [ "\$TIMEOUT_VAL" -gt 0 ] 2>/dev/null; then
-  CLAUDE_CMD="timeout \$TIMEOUT_VAL claude -p"
-fi
-
-# === Retry loop: keep trying until flag found ===
-ATTEMPT=0
-FLAGS=""
-
-while true; do
-  ATTEMPT=\$((ATTEMPT + 1))
-  echo "" >> "\$REPORT_DIR/session.log"
-  echo "═══════════════════════════════════════" >> "\$REPORT_DIR/session.log"
-  echo "=== ATTEMPT \$ATTEMPT (started \$(date)) ===" >> "\$REPORT_DIR/session.log"
-  echo "═══════════════════════════════════════" >> "\$REPORT_DIR/session.log"
-
-  # Build prompt: on retry, append previous failure context
-  if [ \$ATTEMPT -gt 1 ]; then
-    CURRENT_PROMPT="\$REPORT_DIR/prompt_attempt_\${ATTEMPT}.txt"
-    cp "\$PROMPT_FILE" "\$CURRENT_PROMPT"
-    {
-      echo ""
-      echo "═══ RETRY ATTEMPT \$ATTEMPT ═══"
-      echo "Previous \$((ATTEMPT - 1)) attempt(s) FAILED to capture the flag."
-      echo ""
-      echo "=== Previous session log (last 150 lines) ==="
-      tail -150 "\$REPORT_DIR/session.log" 2>/dev/null || true
-      echo ""
-      if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
-        echo "=== Checkpoint from previous attempt ==="
-        cat "\$CHALLENGE_DIR/checkpoint.json"
-        echo ""
-      fi
-      if [ -f "\$CHALLENGE_DIR/solve.py" ]; then
-        echo "=== Previous solve.py ==="
-        cat "\$CHALLENGE_DIR/solve.py"
-        echo ""
-      fi
-      echo "CRITICAL INSTRUCTIONS FOR RETRY:"
-      echo "1. You MUST try a FUNDAMENTALLY DIFFERENT approach than previous attempts."
-      echo "2. Analyze WHY the previous attempt failed before starting."
-      echo "3. Read any existing artifacts in \$CHALLENGE_DIR for context."
-      echo "4. Do NOT repeat the same strategy that already failed."
-      echo "5. Consider: different vulnerability class, different exploit technique, re-analyzing the binary/source."
-    } >> "\$CURRENT_PROMPT"
-  else
-    CURRENT_PROMPT="\$PROMPT_FILE"
-  fi
-
-  \$CLAUDE_CMD "\$(cat "\$CURRENT_PROMPT")" --permission-mode bypassPermissions --model "\$MODEL" --output-format stream-json --verbose 2>&1 | python3 -u "\$SCRIPT_DIR/tools/stream_parser.py" "\$REPORT_DIR/session.log"
-  CLAUDE_EXIT=\$?
-
-  # Check for flags — prioritize verified remote flags over session.log grep
-  FLAGS=""
-  FLAG_SOURCE=""
-
-  # Priority 1: flag_captured.txt (written by verifier after remote execution)
-  if [ -f "\$CHALLENGE_DIR/flag_captured.txt" ]; then
-    VERIFIED_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/flag_captured.txt" 2>/dev/null | sort -u || true)
-    if [ -n "\$VERIFIED_FLAGS" ]; then
-      FLAGS="\$VERIFIED_FLAGS"
-      FLAG_SOURCE="remote_verified"
-    fi
-  fi
-
-  # Priority 2: remote_output.txt (verifier's remote execution output)
-  if [ -z "\$FLAGS" ] && [ -f "\$CHALLENGE_DIR/remote_output.txt" ]; then
-    REMOTE_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$CHALLENGE_DIR/remote_output.txt" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
-    if [ -n "\$REMOTE_FLAGS" ]; then
-      FLAGS="\$REMOTE_FLAGS"
-      FLAG_SOURCE="remote_output"
-    fi
-  fi
-
-  # Priority 3: session.log — if checkpoint shows pipeline completed
-  if [ -z "\$FLAGS" ]; then
-    CHECKPOINT_OK=false
-    if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
-      CP_STATUS=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('status',''))" 2>/dev/null || echo "")
-      CP_AGENT=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('agent',''))" 2>/dev/null || echo "")
-      if [ "\$CP_STATUS" = "completed" ] && { [ "\$CP_AGENT" = "verifier" ] || [ "\$CP_AGENT" = "reporter" ]; }; then
-        CHECKPOINT_OK=true
-      fi
-    fi
-
-    if [ "\$CHECKPOINT_OK" = true ]; then
-      SESSION_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
-      if [ -n "\$SESSION_FLAGS" ]; then
-        FLAGS="\$SESSION_FLAGS"
-        FLAG_SOURCE="session_log_verified"
-      fi
-    fi
-  fi
-
-  # Priority 4: session.log fallback — no checkpoint required
-  if [ -z "\$FLAGS" ]; then
-    FALLBACK_FLAGS=\$(grep -oE '$FLAG_REGEX' "\$REPORT_DIR/session.log" 2>/dev/null | grep -vE '\{(\.\.\.|\.\.\.|xxx|test|PLACEHOLDER|REDACTED|fake_flag)\}' | sort -u || true)
-    if [ -n "\$FALLBACK_FLAGS" ]; then
-      FLAGS="\$FALLBACK_FLAGS"
-      FLAG_SOURCE="session_log_fallback"
-    fi
-  fi
-
-  if [ -n "\$FLAGS" ]; then
-    echo "" >> "\$REPORT_DIR/session.log"
-    echo "FLAGS FOUND on attempt \$ATTEMPT (source: \$FLAG_SOURCE):" >> "\$REPORT_DIR/session.log"
-    echo "\$FLAGS" >> "\$REPORT_DIR/session.log"
-    echo "\$FLAGS" > "\$REPORT_DIR/flags.txt"
-    break
-  fi
-
-  echo "" >> "\$REPORT_DIR/session.log"
-  echo "NO FLAGS FOUND (attempt \$ATTEMPT)" >> "\$REPORT_DIR/session.log"
-
-  # Stop if pipeline fully completed (reporter done) — no point retrying
-  if [ -f "\$CHALLENGE_DIR/checkpoint.json" ]; then
-    _CP_AGENT=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('agent',''))" 2>/dev/null || echo "")
-    _CP_STATUS=\$(python3 -c "import json; d=json.load(open('\$CHALLENGE_DIR/checkpoint.json')); print(d.get('status',''))" 2>/dev/null || echo "")
-    if [ "\$_CP_STATUS" = "completed" ] && [ "\$_CP_AGENT" = "reporter" ]; then
-      echo "Pipeline fully completed (reporter done) but no flag captured. Stopping." >> "\$REPORT_DIR/session.log"
-      break
-    fi
-  fi
-
-  # Check retry limit (0 = unlimited)
-  if [ "\$MAX_RETRIES_VAL" -gt 0 ] 2>/dev/null && [ \$ATTEMPT -ge "\$MAX_RETRIES_VAL" ]; then
-    echo "MAX RETRIES (\$MAX_RETRIES_VAL) reached. Giving up." >> "\$REPORT_DIR/session.log"
-    break
-  fi
-
-  echo "=== RETRYING in 5 seconds... ===" >> "\$REPORT_DIR/session.log"
-  sleep 5
-done
-
-echo '' >> "\$REPORT_DIR/session.log"
-echo '=== SESSION COMPLETE ===' >> "\$REPORT_DIR/session.log"
-echo "Timestamp: \$(date)" >> "\$REPORT_DIR/session.log"
-echo "Total attempts: \$ATTEMPT" >> "\$REPORT_DIR/session.log"
-
-# Index writeup if exists
-if [ ! -s "\$WRITEUP_FILE" ]; then
-  echo '[*] Writeup not found, generating from artifacts...' >> "\$REPORT_DIR/session.log"
-  for md in "\$CHALLENGE_DIR"/*.md "\$REPORT_DIR"/*.md; do
-    [ -f "\$md" ] && python3 "\$KNOWLEDGE_PY" add "\$md" 2>/dev/null || true
-  done
-else
-  python3 "\$KNOWLEDGE_PY" add "\$WRITEUP_FILE" 2>/dev/null || true
-  echo '[*] Writeup indexed to knowledge DB' >> "\$REPORT_DIR/session.log"
-fi
-
-FINAL_EXIT=\$(bash "\$SCRIPT_DIR/machine.sh" _exit_code "\$REPORT_DIR" 2>/dev/null || echo 0)
-
-# Determine session status: flag found = completed, otherwise incomplete
-SESSION_STATUS='completed'
-if [ -z "\$FLAGS" ]; then
-  SESSION_STATUS='incomplete'
-fi
-
-bash "\$SCRIPT_DIR/machine.sh" _summary "\$REPORT_DIR" learn "\$CHALLENGE_DIR" "\$START_TS" "\$FINAL_EXIT" "\$SESSION_STATUS" 2>/dev/null || true
-
-# === Terminal notification ===
-END_TS=\$(date +%s)
-ELAPSED=\$(( END_TS - START_TS ))
-MINS=\$(( ELAPSED / 60 ))
-SECS=\$(( ELAPSED % 60 ))
-
-NOTIFY_FILE="\$REPORT_DIR/result.txt"
-echo "" > "\$NOTIFY_FILE"
-echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
-if [ -n "\$FLAGS" ]; then
-  echo "  MACHINE — Learn Session Complete" >> "\$NOTIFY_FILE"
-else
-  echo "  MACHINE — Learn Session Failed" >> "\$NOTIFY_FILE"
-fi
-echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
-echo "  Challenge: \$(basename "\$CHALLENGE_DIR")" >> "\$NOTIFY_FILE"
-echo "  Duration:  \${MINS}m \${SECS}s" >> "\$NOTIFY_FILE"
-echo "  Attempts:  \$ATTEMPT" >> "\$NOTIFY_FILE"
-echo "  Status:    \$SESSION_STATUS" >> "\$NOTIFY_FILE"
-if [ -n "\$FLAGS" ]; then
-  echo "" >> "\$NOTIFY_FILE"
-  echo "  ✓ FLAG CAPTURED:" >> "\$NOTIFY_FILE"
-  echo "\$FLAGS" | while read f; do echo "    \$f" >> "\$NOTIFY_FILE"; done
-else
-  echo "" >> "\$NOTIFY_FILE"
-  echo "  ✗ No flags found" >> "\$NOTIFY_FILE"
-fi
-if [ -s "\$WRITEUP_FILE" ]; then
-  echo "  ✓ Writeup saved: \$WRITEUP_FILE" >> "\$NOTIFY_FILE"
-else
-  echo "  ✗ Writeup not generated" >> "\$NOTIFY_FILE"
-fi
-echo "════════════════════════════════════════" >> "\$NOTIFY_FILE"
-
-cat "\$NOTIFY_FILE" >> "\$REPORT_DIR/session.log"
-
-# Notify only the terminal that started this session
-if [ -n "\$MY_TTY" ] && [ -w "\$MY_TTY" ]; then
-  cat "\$NOTIFY_FILE" > "\$MY_TTY" 2>/dev/null
-  printf '\a' > "\$MY_TTY" 2>/dev/null
-fi
-
-kill \$OOM_WATCHDOG_PID 2>/dev/null || true
-rm -f "\$PID_FILE"
-RUNNER_EOF
-    chmod +x "$RUNNER"
-
-    # Run in background
-    nohup bash "$RUNNER" > /dev/null 2>&1 &
-
-    BGPID=$!
-    echo "$BGPID" > "$PID_FILE"
-    echo "$BGPID $REPORT_DIR $TIMESTAMP learn $START_TS" >> "$SCRIPT_DIR/.machine.history"
-
-    if [ "$JSON_OUTPUT" = true ]; then
-      echo "$REPORT_DIR/summary.json"
-    else
-      echo ""
-      echo "[*] PID: $BGPID"
-      echo "[*] To monitor: tail -f $REPORT_DIR/session.log"
-      echo "[*] Writeup will be saved to: $WRITEUP_FILE"
-    fi
+    # --- Main learn mode: redirect to ctf mode (ctf now includes writeup) ---
+    echo "[*] 'learn' mode redirecting to 'ctf' (ctf now always writes up)"
+    exec bash "$SCRIPT_DIR/machine.sh" ctf "$TARGET" ${SCOPE:+"$SCOPE"} ${SERVER:+"$SERVER"}
     ;;
 
   status)
