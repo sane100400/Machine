@@ -22,17 +22,12 @@ permissionMode: bypassPermissions
 ## SageMath 사용법
 
 ```bash
-# Sage 경로 (시스템 PATH에 없음 — 반드시 전체 경로 사용)
-SAGE=~/miniconda3/envs/sage/bin/sage
+# sage가 PATH에 있음 — 그냥 sage로 호출
+sage solve.sage           # .sage 파일 실행 (Sage 문법)
+sage -c "print(factor(12345678901234567))"  # 한 줄 실행
 
-# .sage 파일 실행 (권장 — Sage 문법 사용 가능)
-$SAGE solve.sage
-
-# 한 줄 실행
-$SAGE -c "print(factor(12345678901234567))"
-
-# Python 패키지는 Sage 환경에도 설치됨 (pycryptodome 등)
-$SAGE -c "from Crypto.Util.number import long_to_bytes; print(long_to_bytes(123))"
+# Python 패키지도 Sage 환경에 설치됨 (pycryptodome 등)
+sage -c "from Crypto.Util.number import long_to_bytes; print(long_to_bytes(123))"
 ```
 
 ### 언제 .sage vs .py?
@@ -52,8 +47,8 @@ python3 ~/tools/RsaCtfTool/RsaCtfTool.py -n <n> -e <e> --uncipher <c> --attack w
 # 인수분해
 # factordb.com 조회 (WebFetch)
 # SageMath
-$SAGE -c "factor(<n>)"
-$SAGE -c "
+sage -c "factor(<n>)"
+sage -c "
 n = <n>
 # Pollard p-1
 p = n.factor()
@@ -74,7 +69,7 @@ n을 공유       → Common modulus attack
 ### SageMath 패턴
 ```python
 # Wiener
-$SAGE -c "
+sage -c "
 from sage.all import *
 n = <n>
 e = <e>
@@ -89,7 +84,7 @@ for i in range(len(cf)):
 "
 
 # Coppersmith (small message, partial key)
-$SAGE -c "
+sage -c "
 R.<x> = PolynomialRing(Zmod(<n>))
 f = (<known_prefix> + x)^<e> - <c>
 f = f.monic()
@@ -97,7 +92,7 @@ print(f.small_roots(X=2^<unknown_bits>, beta=1))
 "
 
 # ECC discrete log (small order)
-$SAGE -c "
+sage -c "
 p = <prime>
 E = EllipticCurve(GF(p), [<a>, <b>])
 G = E(<gx>, <gy>)
