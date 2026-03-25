@@ -10,10 +10,11 @@ __pycache__/
 # Auto-memory (per-user, not shareable)
 .claude/projects/
 
-# Solve records (template only in git)
+# Knowledge DB (auto-generated, local only)
 knowledge/challenges/[!_]*.md
-knowledge/kb.db
 knowledge/challenges/*/
+knowledge/techniques/
+knowledge/kb.db
 
 # Runtime state (session-specific)
 state.db
