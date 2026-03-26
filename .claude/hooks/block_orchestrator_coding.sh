@@ -1,35 +1,37 @@
 #!/bin/bash
-# Block orchestrator from directly writing solve files
-# Only agents should create solve.py, sat_solve.py, etc.
-# This hook runs on PreToolUse for Write/Edit
+# PreToolUse hook: warn orchestrator when it directly runs solve code
+# Agents are fine — this only matters for the main orchestrator session
 
-# Read the tool input from stdin
 INPUT=$(cat)
 
-# Extract file path from the tool call
-FILE_PATH=$(echo "$INPUT" | jq -r '.file_path // .path // empty' 2>/dev/null)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 
-if [ -z "$FILE_PATH" ]; then
-    exit 0  # Can't determine path, allow
-fi
-
-BASENAME=$(basename "$FILE_PATH" 2>/dev/null)
-
-# Check if this is a solve-related file being written
-case "$BASENAME" in
-    solve*.py|sat_solve*.py|exploit*.py|attack*.py|crack*.py|pwn*.py)
-        # Check if we're inside a subagent (CLAUDE_AGENT env var or similar)
-        # If the tool_use_id suggests main session, block it
-        echo "⚠️ ORCHESTRATOR WARNING: You are writing '$BASENAME' directly."
-        echo "CLAUDE.md Rule 1: Never solve directly. Spawn an agent instead."
-        echo "Use: Agent(subagent_type='crypto', prompt='...')"
-        echo ""
-        echo "If the previous agent failed, re-spawn with better context:"
-        echo "  1. Analyze WHY it failed"  
-        echo "  2. Add failure details to HANDOFF"
-        echo "  3. Spawn agent again"
-        # Don't block (exit 0), just warn strongly
-        exit 0
+case "$TOOL_NAME" in
+    Write|Edit)
+        FILE_PATH=$(echo "$INPUT" | jq -r '.file_path // empty' 2>/dev/null)
+        BASENAME=$(basename "$FILE_PATH" 2>/dev/null)
+        case "$BASENAME" in
+            solve*.py|sat_solve*.py|exploit*.py|attack*.py|crack*.py|pwn*.py|*.sage)
+                echo "⚠️ ORCHESTRATOR: You are writing '$BASENAME' directly."
+                echo "→ CLAUDE.md Rule 1: Spawn an agent. Re-spawn crypto/pwn/rev agent with failure context."
+                ;;
+        esac
+        ;;
+    Bash)
+        COMMAND=$(echo "$INPUT" | jq -r '.command // empty' 2>/dev/null)
+        # Detect inline solve code (heredoc or long python/sage one-liners)
+        case "$COMMAND" in
+            *"<< '"*|*"<< \""*|*"<<PYEOF"*|*"<<'PYEOF'"*|*"<<'SAGE'"*|*"<<SAGE"*)
+                # Heredoc = writing code inline
+                echo "⚠️ ORCHESTRATOR: You are running inline solve code via heredoc."
+                echo "→ CLAUDE.md Rule 1: Spawn an agent instead. You are a manager, not an engineer."
+                echo "→ Analyze the failure, enrich HANDOFF context, re-spawn the agent."
+                ;;
+            *"python3 solve"*|*"python3 sat_"*|*"python3 exploit"*|*"sage solve"*|*"sage /tmp/solve"*)
+                # Running solve scripts directly
+                # This is OK if testing — but creating new ones is not
+                ;;
+        esac
         ;;
 esac
 
