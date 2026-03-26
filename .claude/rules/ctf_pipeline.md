@@ -1,112 +1,132 @@
-# Machine — CTF Pipeline
+# Machine v2 — CTF Pipeline
 
-## Category Detection (Orchestrator MANDATORY)
+## Orchestrator Boundary (MANDATORY)
 
-Before spawning any agent, identify the challenge category:
+The orchestrator (main Claude session) coordinates but does NOT solve:
+- **DO**: Run triage, spawn @solver, run learn.py, fix 1-2 line bugs in solver output
+- **DO NOT**: Write solve.py from scratch, do full binary analysis, replace the solver
+- **Why**: Solver gets a fresh context window. Orchestrator context is for coordination and retries.
 
-```
-1. Read challenge description / README
-2. Check file types: ELF/PE/Mach-O → pwn or rev | .py/.js/URL → web or crypto | pcap/img/zip → forensics | .sol/.abi → web3
-3. Check challenge tags if provided
-4. If ambiguous → ask user
+## Triage-First Flow (MANDATORY)
+
+Before any solving, run triage:
+
+```bash
+python3 tools/triage.py <challenge_dir> [--category CAT]
 ```
 
-## Pipelines by Category
+This outputs: category, difficulty, pipeline mode, knowledge context.
 
-### PWN
-```
-pwn → critic → verifier → reporter
-```
-| Agent | Tools | Output |
-|-------|-------|--------|
-| pwn | Ghidra MCP (static), gdb+GEF (dynamic), checksec, ROPgadget, one_gadget, pwntools | solve.py |
-| critic | gdb — cross-verify offsets/addresses | critic_review.md |
-| verifier | local 3x run → remote run | flag |
+## Category Detection
 
-### REV
+triage.py auto-detects, but you can verify:
 ```
-rev → critic → verifier → reporter
+ELF/PE + network funcs → pwn
+ELF/PE + correct/wrong strings → rev
+docker-compose + app code → web
+.py + output.txt (no binary) → crypto
+.pcap/.mem/.img/images → forensics
+.sol/foundry.toml → web3
 ```
-| Agent | Tools | Output |
-|-------|-------|--------|
-| rev | Ghidra MCP (static), gdb+GEF, Frida (anti-debug/unpacking), z3, angr, strace/ltrace | solve.py |
-| critic | verify algorithm description vs binary behavior | critic_review.md |
-| verifier | python3 solve.py \| ./binary | flag |
 
-### WEB (3-Phase 강제)
-```
-web → web-docker → web-remote → critic → verifier → reporter
-```
-| Agent | Phase | Tools | Output |
-|-------|-------|-------|--------|
-| web | 1. 소스 분석 | Read, Grep, Glob (네트워크 도구 금지) | web_analysis.md, solve.py 초안 |
-| web-docker | 2. 로컬 검증 | docker compose, curl localhost, python3 solve.py | docker_test_report.md (2/2 성공 필수) |
-| web-remote | 3. 리모트 플래그 | python3 solve.py (TARGET=REMOTE) | remote_output.txt, flag |
-| critic | 검증 | cross-verify exploit logic | critic_review.md |
-| verifier | 최종 확인 | flag format validation | flag |
+## Pipeline Modes
 
-**Phase 순서 절대 위반 금지:**
-- web 에이전트는 서버에 HTTP 요청을 보내지 않는다
-- web-docker는 localhost만 공격한다 (리모트 접근 금지)
-- web-remote는 로컬 2/2 성공 후에만 실행된다
-
-### CRYPTO
-```
-crypto → critic → verifier → reporter
-```
-| Agent | Tools | Output |
-|-------|-------|--------|
-| crypto | z3, SageMath, pycryptodome, RsaCtfTool, hashcat/john | solve.py |
-| critic | math/logic cross-verify | critic_review.md |
-| verifier | python3 solve.py → flag | flag |
-
-### FORENSICS
-```
-forensics → critic → verifier → reporter
-```
-| Agent | Tools | Output |
-|-------|-------|--------|
-| forensics | binwalk, zsteg, steghide, tshark, volatility3, exiftool, foremost | forensics_report.md |
-| critic | verify extraction chain, source artifact | critic_review.md |
-| verifier | confirm flag | flag |
-
-### WEB3
-```
-web3 → critic → verifier → reporter
-```
-| Agent | Tools | Output |
-|-------|-------|--------|
-| web3 | Slither (static), Mythril (symbolic), Foundry forge+cast (dynamic), Semgrep | Exploit.t.sol |
-| critic | verify exploit logic, storage slots, gas limits | critic_review.md |
-| verifier | forge test -vvvv → flag/ownership captured | flag |
-
----
-
-## Quality Gate Checks (MANDATORY between stages)
+### Lightweight (easy/medium)
 
 ```
-worker → [artifact-check --stage critic] → critic
-critic → [artifact-check --stage verifier] → verifier
-verifier → [artifact-check --stage reporter] → reporter
+triage.py → @solver (with knowledge context)
+              ↓
+           solve.py works? → flag → learn.py record
+              ↓ (stuck 3x)
+           @critic → feedback → re-spawn @solver
 ```
+
+- Solver does EVERYTHING: analysis, exploit, local verification
+- No mandatory critic or verifier unless solver requests it
+- This is the DEFAULT mode
+
+### Full (hard)
+
+```
+triage.py → @solver (with knowledge context)
+              ↓
+           solve.py → @critic (cross-verify)
+              ↓
+           @verifier (remote flag extraction)
+              ↓
+           learn.py record
+```
+
+- Used when: difficulty=hard, or multiple solver failures
+- Critic validates offsets, logic, and exploit chain
+- Verifier handles remote-only execution
+
+## Web Challenge Flow
+
+Even in lightweight mode, web challenges follow this order:
+
+```
+1. Source analysis ONLY (read code, no requests)
+2. docker compose up -d → exploit on localhost
+3. Verify 2/2 local runs succeed
+4. Only then → remote server
+
+All phases done by @solver — no separate web/web-docker/web-remote agents.
+```
+
+## Solver Prompt Template
+
+```
+[CRITICAL FACTS]
+Flag format: <from config.json>
+Server: <if provided>
+Category: <from triage>
+
+<knowledge_context from triage.py --context>
+
+Challenge directory: <path>
+Files: <list>
+
+Solve this CTF challenge. Save solve.py to the challenge directory.
+If you get stuck after 3 approaches, spawn @critic for review.
+```
+
+## Failure Protocol
+
+| Failures | Action |
+|----------|--------|
+| 1-2 | Normal iteration — debug and fix |
+| 3 same approach | STOP that approach, try fundamentally different one |
+| 3 different approaches | Spawn @critic for second opinion |
+| 5 total | Search writeups (WebSearch), check knowledge base |
+| 7 total | STOP. Record failure via learn.py. Move on. |
+
+## Quality Gates (Full Pipeline Only)
+
+Only used in full pipeline mode (hard challenges):
 
 ```bash
 # Before critic
 python3 tools/quality_gate.py artifact-check <challenge_dir> --stage critic
 
-# Before verifier (critic must have APPROVED)
+# Before verifier
 python3 tools/quality_gate.py artifact-check <challenge_dir> --stage verifier
-
-# Before reporter
-python3 tools/quality_gate.py artifact-check <challenge_dir> --stage reporter
 ```
 
-Gate exit 1 → do NOT proceed. Fix issues first.
+Gate exit 1 → fix issues before proceeding.
 
----
+## Learning Loop (ALWAYS)
 
-## Failure Protocol
+Runs after every challenge attempt, success or failure:
 
-- 3 failures same approach → STOP, try fundamentally different approach
-- 5 total failures → search writeups + knowledge base
-- Remote flag only — local flag files are FAKE
+```bash
+# Success
+python3 tools/learn.py record --challenge-dir DIR --status success \
+    --flag "FLAG{...}" --category <cat>
+
+# Failure
+python3 tools/learn.py record --challenge-dir DIR --status failed \
+    --category <cat> --notes "reason for failure"
+```
+
+This ensures the knowledge DB grows with every attempt.

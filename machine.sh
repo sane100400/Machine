@@ -334,76 +334,87 @@ print(json.dumps(plan, indent=2))
       fi
     done
 
+    # === TRIAGE (v2) ===
+    # Auto-detect category, difficulty, and retrieve knowledge context
+    TRIAGE_JSON=""
+    KNOWLEDGE_CONTEXT=""
+    TRIAGE_CATEGORY="${CATEGORY:-}"
+    TRIAGE_DIFFICULTY="medium"
+    TRIAGE_PIPELINE="lightweight"
+
+    TRIAGE_ARGS="$CHALLENGE_DIR"
+    [ -n "$CATEGORY" ] && TRIAGE_ARGS="$TRIAGE_ARGS --category $CATEGORY"
+
+    if python3 "$SCRIPT_DIR/tools/triage.py" $TRIAGE_ARGS > "$REPORT_DIR/triage.json" 2>/dev/null; then
+      TRIAGE_JSON="$(cat "$REPORT_DIR/triage.json")"
+      TRIAGE_CATEGORY="$(python3 -c "import json; print(json.load(open('$REPORT_DIR/triage.json'))['category'])" 2>/dev/null || echo "${CATEGORY:-unknown}")"
+      TRIAGE_DIFFICULTY="$(python3 -c "import json; print(json.load(open('$REPORT_DIR/triage.json'))['difficulty'])" 2>/dev/null || echo "medium")"
+      TRIAGE_PIPELINE="$(python3 -c "import json; print(json.load(open('$REPORT_DIR/triage.json'))['pipeline'])" 2>/dev/null || echo "lightweight")"
+      KNOWLEDGE_CONTEXT="$(python3 -c "import json; print(json.load(open('$REPORT_DIR/triage.json'))['knowledge_context'])" 2>/dev/null || echo "")"
+      echo "[*] Triage: category=$TRIAGE_CATEGORY difficulty=$TRIAGE_DIFFICULTY pipeline=$TRIAGE_PIPELINE" >> "$REPORT_DIR/session.log" 2>/dev/null
+    else
+      echo "[*] Triage failed, using defaults" >> "$REPORT_DIR/session.log" 2>/dev/null
+    fi
+
     # Write prompt to file (avoids heredoc escaping hell in nohup)
     PROMPT_FILE="$REPORT_DIR/prompt.txt"
     cat > "$PROMPT_FILE" <<PROMPT_EOF
-You are Machine Orchestrator. Use Agent Teams to solve this CTF challenge.
+You are Machine v2. Solve this CTF challenge using the @solver agent.
 
+=== TRIAGE RESULT ===
 Challenge directory: $CHALLENGE_DIR
 Files found: $FILES
 Report directory: $REPORT_DIR
-Category: ${CATEGORY:-NOT SPECIFIED — you must detect it}
+Category: $TRIAGE_CATEGORY
+Difficulty: $TRIAGE_DIFFICULTY
+Pipeline: $TRIAGE_PIPELINE
 $([ -n "$SERVER" ] && echo "Target server: $SERVER")
+
 $(if [ -n "$CHALLENGE_META" ]; then
-echo "
-=== CHALLENGE DESCRIPTION (from challenge.md) ===
+echo "=== CHALLENGE DESCRIPTION ===
 $CHALLENGE_META
 === END DESCRIPTION ===
 
-IMPORTANT: Use any flag format regex, charset constraints, or server info from the description above.
-These are CRITICAL constraints — apply them to your solver from the start."
+IMPORTANT: Use any flag format regex, charset constraints, or server info from the description above."
 fi)
 
-MANDATORY: Follow CLAUDE.md pipeline rules.
+=== KNOWLEDGE CONTEXT (auto-retrieved) ===
+$KNOWLEDGE_CONTEXT
 
-STEP 1: Read knowledge/index.md — check if already solved
-STEP 2: Pre-check (file, strings, checksec on binaries)
-$(if [ -n "$CATEGORY" ]; then
-echo "STEP 3: Category is $CATEGORY (user-specified). Skip detection."
-echo "STEP 4: Immediately spawn the $CATEGORY pipeline:"
-echo "  @$CATEGORY → @critic → @verifier → @reporter"
-else
-echo "STEP 3: Determine category: pwn / rev / web / crypto / forensics / web3"
-echo "STEP 4: Spawn pipeline agents (Agent tool with subagent_type)"
-echo ""
-echo "Pipeline by category:"
-echo "  PWN:       @pwn → @critic → @verifier → @reporter"
-echo "  REV:       @rev → @critic → @verifier → @reporter"
-echo "  WEB:       @web → @web-docker → @web-remote → @critic → @verifier → @reporter"
-echo "  CRYPTO:    @crypto → @critic → @verifier → @reporter"
-echo "  FORENSICS: @forensics → @critic → @verifier → @reporter"
-echo "  WEB3:      @web3 → @critic → @verifier → @reporter"
-fi)
+=== INSTRUCTIONS ===
+
+STEP 1: Spawn @solver (Agent tool, subagent_type="solver") with:
+  - The KNOWLEDGE CONTEXT above (copy it into the solver prompt)
+  - Challenge directory, files, category, server info
+  - Flag formats: $FLAG_DISPLAY
+
+STEP 2: If solver succeeds with flag:
+  python3 $SCRIPT_DIR/tools/learn.py record --challenge-dir $CHALLENGE_DIR \
+    --status success --flag "<FLAG>" --category $TRIAGE_CATEGORY
+
+STEP 3: If solver fails:
+  - Analyze failure reason
+  - Re-spawn @solver with failure context (DIFFERENT approach)
+  - After 3 failures: spawn @critic for second opinion, then re-try
+  - After 5 failures: WebSearch for writeups
+  - After 7 failures: STOP and record:
+    python3 $SCRIPT_DIR/tools/learn.py record --challenge-dir $CHALLENGE_DIR \
+      --status failed --category $TRIAGE_CATEGORY --notes "<failure reason>"
+
 $(if [ -n "$SERVER" ]; then
-echo "
-IMPORTANT: Remote server = $SERVER
-- This is the REAL flag server. But DO NOT hit it first.
-- For WEB challenges, you MUST follow this order:
-  1. Source code analysis ONLY (no requests to any server)
-  2. docker compose up -d → exploit on localhost FIRST
-  3. Only after local success → run solve.py against $SERVER
-- For PWN challenges: use remote() in pwntools only after local binary test passes
-- Flags obtained from $SERVER are REAL flags"
+echo "REMOTE SERVER: $SERVER
+- DO NOT hit remote server first.
+- WEB: source analysis → localhost exploit → then remote
+- PWN: local binary test → then remote(host, port)
+- Flags from $SERVER are REAL flags"
 else
-echo "
-IMPORTANT: No remote server address provided yet.
-- Complete analysis and local verification WITHOUT remote server.
-- When the pipeline reaches the REMOTE stage (web-remote or verifier remote execution):
-  → Use AskUserQuestion to ask the user for the remote server address.
-  → Message: '로컬 검증 완료. 리모트 서버 주소를 입력해주세요 (예: host1.dreamhack.games:12345)'
-  → Wait for the user's response before proceeding.
-- This allows the user to start the VM fresh right before the remote stage, avoiding VM timeout issues."
+echo "NO REMOTE SERVER provided.
+- Complete analysis and local verification first.
+- When ready for remote: use AskUserQuestion to ask user for server address.
+- Message: 'Local verification complete. Please provide the remote server (e.g., host:port)'"
 fi)
 
-Pass each agent's output to the next via structured HANDOFF.
 Save solve.py to $CHALLENGE_DIR/solve.py
-
-STEP 5: Write a detailed writeup to $WRITEUP_FILE
-Include: category, technique, environment, vulnerability, solve steps, key commands, failed approaches, flag.
-Then run: python3 $SCRIPT_DIR/tools/knowledge.py add $WRITEUP_FILE
-
-STEP 6: Update knowledge/index.md with this challenge entry
-
 Flag formats: $FLAG_DISPLAY
 PROMPT_EOF
 
@@ -492,9 +503,10 @@ while true; do
       echo "CRITICAL INSTRUCTIONS FOR RETRY:"
       echo "1. You MUST try a FUNDAMENTALLY DIFFERENT approach than previous attempts."
       echo "2. Analyze WHY the previous attempt failed before starting."
-      echo "3. Read any existing artifacts in \$CHALLENGE_DIR for context."
+      echo "3. Read existing artifacts in \$CHALLENGE_DIR for context."
       echo "4. Do NOT repeat the same strategy that already failed."
-      echo "5. Consider: different vulnerability class, different exploit technique, re-analyzing the binary/source."
+      echo "5. Consider: different vulnerability class, different exploit technique, re-analyzing from scratch."
+      echo "6. Spawn @solver with the failure context. The solver CAN code — let it iterate."
     } >> "\$CURRENT_PROMPT"
   else
     CURRENT_PROMPT="\$PROMPT_FILE"
@@ -599,10 +611,26 @@ if [ -z "\$FLAGS" ]; then
   SESSION_STATUS='incomplete'
 fi
 
-# Index writeup to knowledge DB if it was created
+# === Learning Loop (v2) — always runs ===
+LEARN_PY="\$SCRIPT_DIR/tools/learn.py"
+if [ -f "\$LEARN_PY" ]; then
+  if [ -n "\$FLAGS" ]; then
+    FIRST_FLAG=\$(echo "\$FLAGS" | head -1)
+    echo "[*] Learning loop: recording success" >> "\$REPORT_DIR/session.log"
+    python3 "\$LEARN_PY" record --challenge-dir "\$CHALLENGE_DIR" \
+      --status success --flag "\$FIRST_FLAG" \
+      --category "$TRIAGE_CATEGORY" >> "\$REPORT_DIR/session.log" 2>&1 || true
+  else
+    echo "[*] Learning loop: recording failure" >> "\$REPORT_DIR/session.log"
+    python3 "\$LEARN_PY" record --challenge-dir "\$CHALLENGE_DIR" \
+      --status failed --category "$TRIAGE_CATEGORY" \
+      --notes "No flag captured after \$ATTEMPT attempts" >> "\$REPORT_DIR/session.log" 2>&1 || true
+  fi
+fi
+
+# Legacy: also index writeup if manually created
 WRITEUP_FILE="$WRITEUP_FILE"
 if [ -f "\$WRITEUP_FILE" ] && [ -s "\$WRITEUP_FILE" ]; then
-  echo "[*] Indexing writeup: \$WRITEUP_FILE" >> "\$REPORT_DIR/session.log"
   python3 "\$SCRIPT_DIR/tools/knowledge.py" add "\$WRITEUP_FILE" >> "\$REPORT_DIR/session.log" 2>&1 || true
 fi
 

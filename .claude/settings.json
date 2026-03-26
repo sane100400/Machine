@@ -92,16 +92,6 @@
             "timeout": 15
           }
         ]
-      },
-      {
-        "matcher": "Write|Edit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$(git -C \"$(dirname \"$0\")\" rev-parse --show-toplevel 2>/dev/null || echo .)\"/.claude/hooks/block_orchestrator_coding.sh",
-            "timeout": 5
-          }
-        ]
       }
     ],
     "PostToolUse": [
