@@ -104,6 +104,23 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git -C \"$(dirname \"$0\")\" rev-parse --show-toplevel 2>/dev/null || echo .)\"/.claude/hooks/auto_decision_tree.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git -C \"$(dirname \"$0\")\" rev-parse --show-toplevel 2>/dev/null || echo .)\"/.claude/hooks/reset_fail_count.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "matcher": "*",
